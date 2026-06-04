@@ -1,6 +1,7 @@
 'use strict'
 
 const config = require('../config/index.js')
+const { logger } = require('./logger')
 
 /**
  * DSML tool-call adapter for Qwen.
@@ -716,10 +717,13 @@ function createSieve() {
         }))
         return { textDelta: '', toolCallsDelta: deltas }
       }
-      const out = TC_OPEN + blockBuf
+      logger.warn('Dropping malformed DSML block during sieve flush', 'TOOLCALL', '', {
+        block_length: blockBuf.length,
+        preview: blockBuf.slice(0, 160),
+      })
       blockBuf = ''
       inside = false
-      return { textDelta: out, toolCallsDelta: null }
+      return { textDelta: '', toolCallsDelta: null }
     }
     return { textDelta: '', toolCallsDelta: null }
   }
