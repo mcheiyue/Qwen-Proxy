@@ -55,6 +55,8 @@ class Account {
                 }
             }
 
+            await this._applyAccountPrivateProxies()
+
             // Best-effort: ensure every account has a bound proxy when a
             // pool is configured. Existing bindings are reused; new
             // accounts get one assigned on first use of the pool.
@@ -115,6 +117,29 @@ class Account {
         } catch (error) {
             logger.error('Failed to initialize proxy pool', 'PROXY', '', error)
             this.proxyPool = null
+        }
+    }
+
+    async _applyAccountPrivateProxies() {
+        const accountsWithProxy = this.accountTokens.filter(acc => acc.email && acc.proxy)
+        if (accountsWithProxy.length === 0) return
+
+        const proxyUrls = [...new Set(accountsWithProxy.map(acc => acc.proxy).filter(Boolean))]
+        if (!this.proxyPool) {
+            const savedStatuses = await this.dataPersistence.loadProxyStatuses()
+            const savedBindings = await this.dataPersistence.loadProxyBindings()
+            this.proxyPool = new ProxyPool(this.dataPersistence, proxyUrls)
+            const newStatuses = { ...savedStatuses }
+            for (const url of proxyUrls) {
+                if (!newStatuses[url]) newStatuses[url] = 'untested'
+            }
+            await this.proxyPool.initialize(newStatuses, savedBindings)
+            await this.dataPersistence.saveProxyStatuses(newStatuses)
+        }
+
+        for (const acc of accountsWithProxy) {
+            const bound = await this.proxyPool.bindAccountToProxy(acc.email, acc.proxy)
+            if (bound) acc.proxy = bound
         }
     }
 

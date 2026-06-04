@@ -9,6 +9,21 @@ const redisClient = require('./redis-client.js')
 //   { accounts: [...], proxyBindings: {...}, proxyStatuses: {...} }
 const REDIS_KEY = 'qwen2api:data'
 
+function isValidProxyUrl(value) {
+  if (!value || typeof value !== 'string') return false
+  try {
+    const u = new URL(value.trim())
+    return /^(socks5h?|socks4a?|socks|http|https):$/.test(u.protocol)
+  } catch {
+    return false
+  }
+}
+
+function normalizeAccountProxy(value) {
+  const proxy = typeof value === 'string' ? value.trim() : ''
+  return isValidProxyUrl(proxy) ? proxy : null
+}
+
 /**
  * Data Persistence Manager
  * Handles account + smart-proxy storage. Three backends:
@@ -130,10 +145,15 @@ class DataPersistence {
       if (separatorIndex === -1) continue
 
       const email = item.slice(0, separatorIndex).trim()
-      const password = item.slice(separatorIndex + 1).trim()
+      const rest = item.slice(separatorIndex + 1).trim()
+      const pipeIndex = rest.indexOf('|')
+      const password = (pipeIndex === -1 ? rest : rest.slice(0, pipeIndex)).trim()
+      const proxy = pipeIndex === -1 ? null : normalizeAccountProxy(rest.slice(pipeIndex + 1))
 
       if (email && password) {
-        accounts.push({ email, password, token: null, expires: null })
+        const account = { email, password, token: null, expires: null }
+        if (proxy) account.proxy = proxy
+        accounts.push(account)
       }
     }
 
@@ -166,6 +186,9 @@ class DataPersistence {
         ? (existingIndex !== -1 ? !!data.accounts[existingIndex].disabled : false)
         : !!accountData.disabled,
     }
+    const proxy = normalizeAccountProxy(accountData.proxy)
+      || (existingIndex !== -1 ? normalizeAccountProxy(data.accounts[existingIndex].proxy) : null)
+    if (proxy) updatedAccount.proxy = proxy
 
     if (existingIndex !== -1) {
       data.accounts[existingIndex] = updatedAccount
@@ -191,6 +214,7 @@ class DataPersistence {
         token: account.token,
         expires: account.expires,
         disabled: !!account.disabled,
+        ...(normalizeAccountProxy(account.proxy) ? { proxy: normalizeAccountProxy(account.proxy) } : {}),
       }))
     }
 
@@ -248,6 +272,8 @@ class DataPersistence {
         ? !!(prev && prev.disabled)
         : !!accountData.disabled,
     }
+    const proxy = normalizeAccountProxy(accountData.proxy) || (prev ? normalizeAccountProxy(prev.proxy) : null)
+    if (proxy) updated.proxy = proxy
     if (idx >= 0) blob.accounts[idx] = updated
     else blob.accounts.push(updated)
     return this._writeRedisBlob(blob)
@@ -261,6 +287,7 @@ class DataPersistence {
       token: a.token,
       expires: a.expires,
       disabled: !!a.disabled,
+      ...(normalizeAccountProxy(a.proxy) ? { proxy: normalizeAccountProxy(a.proxy) } : {}),
     }))
     return this._writeRedisBlob(blob)
   }

@@ -207,6 +207,22 @@ class ProxyPool {
     return true
   }
 
+  async bindAccountToProxy(email, url) {
+    if (!email || !url) return null
+    if (!this.proxies.has(url)) {
+      this.proxies.set(url, { url, status: 'untested', assignedAccounts: new Set() })
+      await this._persistStatuses()
+    }
+    if (this.proxyAssignment.has(email)) {
+      const oldUrl = this.proxyAssignment.get(email)
+      const oldEntry = this.proxies.get(oldUrl)
+      if (oldEntry) oldEntry.assignedAccounts.delete(email)
+      this.proxyAssignment.delete(email)
+    }
+    const entry = this.proxies.get(url)
+    return this._bind(email, entry)
+  }
+
   /**
    * Remove a proxy. Any accounts bound to it are unbound and the binding
    * is cleared in persistence so they don't dangle.
