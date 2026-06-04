@@ -81,6 +81,23 @@ docker logs --tail 200 qwen-proxy-test
 curl http://127.0.0.1:17860/health
 ```
 
+快速灰度 smoke：
+
+```powershell
+$env:SMOKE_BASE_URL = "http://127.0.0.1:17860"
+$env:SMOKE_API_KEY = "你的对外 API Key"
+npm run smoke:gray
+```
+
+完整灰度 smoke 会额外触发一次非流式 chat 和一次 `/v1/responses` 请求，确认账号与代理都准备好后再执行：
+
+```powershell
+$env:SMOKE_BASE_URL = "http://127.0.0.1:17860"
+$env:SMOKE_API_KEY = "你的对外 API Key"
+$env:SMOKE_MODEL = "qwen3.6-plus"
+npm run smoke:gray -- --full
+```
+
 ## 灰度验证建议
 
 至少验证以下内容：
