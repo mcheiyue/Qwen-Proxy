@@ -27,6 +27,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     
     steps:
     - name: Checkout code
@@ -91,22 +94,27 @@ jobs:
         platforms: arm64
     
     - name: Login to Docker Hub
-      if: github.event_name != 'pull_request'
+      if: github.event_name != 'pull_request' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
       uses: docker/login-action@v3
       with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        username: ${{ env.DOCKERHUB_USERNAME }}
+        password: ${{ env.DOCKERHUB_TOKEN }}
     
     # 🏷️ 使用package.json的name构建镜像名
     - name: Generate Docker tags
       id: tags
       run: |
         # 使用package.json的name（清理后）作为镜像名
-        DOCKERHUB_OWNER="${{ secrets.DOCKERHUB_USERNAME }}"
+        DOCKERHUB_OWNER="${DOCKERHUB_USERNAME}"
         if [ -z "$DOCKERHUB_OWNER" ]; then
           DOCKERHUB_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
         fi
         DOCKERHUB_REPO="${DOCKERHUB_OWNER}/${{ steps.package-info.outputs.clean_name }}"
+
+        CAN_PUSH="false"
+        if [ "${{ github.event_name }}" != "pull_request" ] && [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+          CAN_PUSH="true"
+        fi
         
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           # PR: 只生成PR标签用于测试
@@ -125,8 +133,10 @@ jobs:
         
         echo "repository=${DOCKERHUB_REPO}" >> $GITHUB_OUTPUT
         echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+        echo "can_push=${CAN_PUSH}" >> $GITHUB_OUTPUT
         echo "🏷️ Docker repository: ${DOCKERHUB_REPO}"
         echo "🏷️ Generated tags: ${TAGS}"
+        echo "📤 Push enabled: ${CAN_PUSH}"
 
     - name: Build local smoke image
       run: docker build -t local/qwen-proxy-smoke:${{ github.sha }} .
@@ -152,7 +162,7 @@ jobs:
 
     - name: Show smoke test logs on failure
       if: failure()
-      run: docker logs qwen-proxy-smoke
+      run: docker logs qwen-proxy-smoke || true
 
     - name: Cleanup smoke test container
       if: always()
@@ -165,7 +175,7 @@ jobs:
         context: .
         file: ./Dockerfile
         platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name != 'pull_request' }}
+        push: ${{ steps.tags.outputs.can_push == 'true' }}
         tags: ${{ steps.tags.outputs.tags }}
         # 添加构建标签
         labels: |
@@ -210,7 +220,7 @@ jobs:
           echo "| **Source** | Repository name (no package.json) |" >> $GITHUB_STEP_SUMMARY
         fi
         
-        if [ "${{ github.event_name }}" != "pull_request" ]; then
+        if [ "${{ steps.tags.outputs.can_push }}" = "true" ]; then
           echo "| **Action** | ✅ **Built and Pushed** |" >> $GITHUB_STEP_SUMMARY
           echo "| **Registry** | Docker Hub |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -233,8 +243,10 @@ jobs:
           echo "# Run container" >> $GITHUB_STEP_SUMMARY
           echo "docker run -p 3000:3000 ${{ steps.tags.outputs.repository }}:latest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-        else
+        elif [ "${{ github.event_name }}" = "pull_request" ]; then
           echo "| **Action** | 🔍 **Built Only (PR)** |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "| **Action** | ⚠️ **Built Only (Docker Hub secrets missing)** |" >> $GITHUB_STEP_SUMMARY
         fi
     
     - name: Build performance check
@@ -253,7 +265,7 @@ jobs:
         echo "🏗️ Architectures: linux/amd64, linux/arm64"
         echo "🐳 Docker Repository: ${{ steps.tags.outputs.repository }}"
         
-        if [ "${{ github.event_name }}" != "pull_request" ]; then
+        if [ "${{ steps.tags.outputs.can_push }}" = "true" ]; then
           echo "📤 Pushed to Docker Hub: ${{ steps.tags.outputs.repository }}"
           echo "🏷️ Tags pushed:"
           echo "  - latest (always updated)"
@@ -261,6 +273,8 @@ jobs:
             echo "  - v${{ steps.package-info.outputs.version }} (from package.json)"
             echo "📦 Package: ${{ steps.package-info.outputs.name }}"
           fi
-        else
+        elif [ "${{ github.event_name }}" = "pull_request" ]; then
           echo "🔍 PR Build: Images built but not pushed"
+        else
+          echo "⚠️ Main Build: Images built but not pushed because Docker Hub secrets are missing"
         fi
