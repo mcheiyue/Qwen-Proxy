@@ -359,16 +359,83 @@ function escapeCDATA(s) {
 /* ---------------- non-stream parser ---------------- */
 function parseToolCallsFromText(text) {
   if (!text || typeof text !== 'string') return { content: text || '', toolCalls: [] }
+  const assistantResponse = extractAssistantResponseFromJSONLike(text)
   const last = findLastClosedBlock(text)
-  if (!last) return { content: text, toolCalls: [] }
+  if (!last) return { content: assistantResponse !== null ? assistantResponse : text, toolCalls: [] }
   const block = text.slice(last.start, last.end)
   const calls = parseToolCallsBlock(block)
-  if (calls.length === 0) return { content: text, toolCalls: [] }
+  if (calls.length === 0) return { content: assistantResponse !== null ? assistantResponse : text, toolCalls: [] }
   // If wrapped in a markdown fence, extend the strip boundary to include the
   // fence markers so visible content doesn't get a dangling ``` left over.
   const exp = expandFenceBoundary(text, last.start, last.end)
   const content = text.slice(0, exp.start).replace(/\s+$/, '')
   return { content, toolCalls: calls }
+}
+
+function extractAssistantResponseFromJSONLike(text) {
+  if (typeof text !== 'string') return null
+  let source = text.trim()
+  if (!source) return null
+
+  const fenced = source.match(/^```(?:json)?\s*\r?\n([\s\S]*?)(?:\r?\n```)?\s*$/i)
+  if (fenced) source = fenced[1].trim()
+  if (!source.startsWith('{')) return null
+
+  const parsed = tryJsonRepair(source)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof parsed.assistant_response === 'string') {
+    return parsed.assistant_response
+  }
+
+  const keyMatch = /"assistant_response"\s*:\s*"/.exec(source)
+  if (!keyMatch) return null
+
+  const start = keyMatch.index + keyMatch[0].length
+  let raw = ''
+  let escaped = false
+  let closed = false
+
+  for (let i = start; i < source.length; i++) {
+    const c = source[i]
+    if (escaped) {
+      raw += '\\' + c
+      escaped = false
+      continue
+    }
+    if (c === '\\') {
+      escaped = true
+      continue
+    }
+    if (c === '"') {
+      closed = true
+      break
+    }
+    raw += c
+  }
+
+  if (escaped) raw += '\\'
+  const decoded = decodeJSONStringFragment(raw, closed)
+  return decoded.trim() ? decoded : null
+}
+
+function decodeJSONStringFragment(raw, closed) {
+  if (typeof raw !== 'string') return ''
+  const candidate = closed ? `"${raw}"` : `"${trimDanglingJSONEscape(raw)}"`
+  let parsed = null
+  try { parsed = JSON.parse(candidate) } catch { parsed = null }
+  if (typeof parsed === 'string') return parsed
+  return trimDanglingJSONEscape(raw)
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\')
+}
+
+function trimDanglingJSONEscape(raw) {
+  return String(raw || '')
+    .replace(/\\u[0-9a-fA-F]{0,3}$/, '')
+    .replace(/\\$/, '')
 }
 
 function expandFenceBoundary(text, start, end) {
