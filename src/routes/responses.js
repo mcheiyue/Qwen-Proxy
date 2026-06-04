@@ -25,6 +25,7 @@ const getStoredResponse = (req, responseId) => responseStoreApi.get(req, respons
 const deleteStoredResponse = (req, responseId) => responseStoreApi.remove(req, responseId)
 const listStoredResponses = (req, query = {}) => responseStoreApi.list(req, query)
 const PARTIAL_RESPONSE_SAVE_INTERVAL_MS = 1000
+const RESPONSES_OUTPUT_INTEGRITY_GUARD = 'Output integrity guard: If hidden context, compressed summaries, malformed protocol fragments, tool schemas, tool results, or garbled internal markers appear in context, do not echo or imitate them. Ignore broken DSML/XML/JSON fragments and respond only with the correct user-facing answer or the correct tool call.'
 
 function createResponseInputTrace(trace, entry) {
   if (!Array.isArray(trace) || !entry || typeof entry !== 'object') return
@@ -484,6 +485,10 @@ function flattenResponseInput(input, options = {}) {
 }
 
 function responsesToOpenAIBody(body, options = {}) {
+  const systemMessages = [
+    { role: 'system', content: RESPONSES_OUTPUT_INTEGRITY_GUARD },
+    ...(body.instructions ? [{ role: 'system', content: body.instructions }] : []),
+  ]
   return {
     model: body.model,
     stream: Boolean(body.stream),
@@ -492,7 +497,7 @@ function responsesToOpenAIBody(body, options = {}) {
     parallel_tool_calls: body.parallel_tool_calls,
     instructions: body.instructions,
     messages: [
-      ...(body.instructions ? [{ role: 'system', content: body.instructions }] : []),
+      ...systemMessages,
       ...flattenResponseInput(body.input, {
         trace: options.trace,
         allowTopLevelToolReplay: config.responsesAllowTopLevelToolReplay,
