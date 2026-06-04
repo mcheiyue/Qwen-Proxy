@@ -447,6 +447,26 @@ function buildCancelledResponseObject(baseResponse, metadata = null) {
   return attachResponseMetadata(response, metadata || baseResponse?.metadata || null)
 }
 
+function buildIncompleteResponseObject(baseResponse, error, metadata = null) {
+  const message = error?.message || String(error || 'Response stream ended before completion')
+  const response = {
+    id: baseResponse?.id || `resp_${generateUUID()}`,
+    object: 'response',
+    created_at: Number(baseResponse?.created_at) || Math.round(Date.now() / 1000),
+    status: 'incomplete',
+    model: baseResponse?.model || 'unknown',
+    output: Array.isArray(baseResponse?.output) ? baseResponse.output : [],
+    incomplete_details: {
+      reason: 'stream_error',
+      message,
+    },
+  }
+  if (baseResponse?.usage) {
+    response.usage = baseResponse.usage
+  }
+  return attachResponseMetadata(response, metadata || baseResponse?.metadata || null)
+}
+
 function attachResponseMetadata(responseObject, metadata) {
   if (!responseObject || typeof responseObject !== 'object') return responseObject
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return responseObject
@@ -467,6 +487,17 @@ async function sendFailedResponsesStream(res, req, model, error, responseId = nu
   res.write('data: [DONE]\n\n')
   res.end()
   return failedResponse
+}
+
+async function sendIncompleteResponsesStream(res, req, baseResponse, error, metadata = null) {
+  const incompleteResponse = await saveResponseObject(req, buildIncompleteResponseObject(baseResponse, error, metadata))
+  res.write(`event: response.incomplete\ndata: ${JSON.stringify({
+    type: 'response.incomplete',
+    response: incompleteResponse,
+  })}\n\n`)
+  res.write('data: [DONE]\n\n')
+  res.end()
+  return incompleteResponse
 }
 
 function registerActiveResponse(responseId, owner, cancel) {
@@ -643,19 +674,6 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
       return cancelledResponse
     })
 
-    const failStream = async (error) => {
-      if (settled) return
-      settled = true
-      clearActiveResponse(responseId)
-      try {
-        logger.error('Responses stream failed', 'RESPONSES', '', buildRequestLogMeta(req, { error: error && error.message ? error.message : error, model }))
-        await sendFailedResponsesStream(res, req, model, error, responseId, responseMetadata)
-        resolve()
-      } catch (streamError) {
-        reject(streamError)
-      }
-    }
-
     const ensureMessageItem = () => {
       if (messageItem) return messageItem
       messageItem = {
@@ -775,6 +793,60 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
           })
         }
         toolCallsByIndex.set(index, existing)
+      }
+    }
+
+    const buildPartialStreamResponse = () => {
+      const output = []
+      if (textBuffer) {
+        output.push({
+          type: 'message',
+          id: messageItem?.id || `msg_${generateUUID()}`,
+          role: 'assistant',
+          content: [{ type: 'output_text', text: textBuffer }],
+        })
+      }
+
+      const sortedToolCalls = [...toolCallsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, tc]) => tc)
+      for (const tc of sortedToolCalls) {
+        output.push({
+          type: 'function_call',
+          id: tc.id,
+          call_id: tc.id,
+          name: tc.name || '',
+          arguments: tc.arguments || '{}',
+        })
+      }
+
+      const reasoningItem = buildReasoningOutputItem(reasoningBuffer)
+      if (reasoningItem) {
+        output.push(reasoningItem)
+      }
+
+      const partialResponse = {
+        id: responseId,
+        object: 'response',
+        created_at: Math.round(Date.now() / 1000),
+        status: 'in_progress',
+        model,
+        output,
+      }
+      if (usage.prompt_tokens || usage.completion_tokens || usage.total_tokens) {
+        partialResponse.usage = buildResponseUsage(usage)
+      }
+      return partialResponse
+    }
+
+    const failStream = async (error) => {
+      if (settled) return
+      settled = true
+      clearActiveResponse(responseId)
+      try {
+        logger.warn('Responses stream incomplete', 'RESPONSES', '', buildRequestLogMeta(req, { error: error && error.message ? error.message : error, model, response_id: responseId }))
+        await sendIncompleteResponsesStream(res, req, buildPartialStreamResponse(), error, responseMetadata)
+        resolve()
+      } catch (streamError) {
+        reject(streamError)
       }
     }
 

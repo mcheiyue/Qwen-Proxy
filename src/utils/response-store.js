@@ -133,7 +133,7 @@ function createInMemoryResponseStore(options = {}) {
     const rawOrder = typeof query.order === 'string' ? query.order.trim().toLowerCase() : ''
     const order = rawOrder === 'asc' ? 'asc' : 'desc'
     const rawStatus = typeof query.status === 'string' ? query.status.trim().toLowerCase() : ''
-    const status = rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'in_progress' || rawStatus === 'cancelled'
+    const status = rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'in_progress' || rawStatus === 'cancelled' || rawStatus === 'incomplete'
       ? rawStatus
       : null
 
