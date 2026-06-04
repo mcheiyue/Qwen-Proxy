@@ -6,6 +6,22 @@ const config = require('../config/index.js')
 const { logger } = require('../utils/logger')
 const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
 
+const buildRequestLogMeta = (req, extra = null) => {
+    const meta = {
+        request_id: req?.requestId || null
+    }
+    if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+        Object.assign(meta, extra)
+    }
+    return meta
+}
+
+const buildRequestErrorBody = (req, message, code) => ({
+    error: message,
+    code,
+    request_id: req?.requestId || null
+})
+
 /**
  * Set response headers
  * @param {object} res - Express response object
@@ -45,7 +61,7 @@ const getImageMarkdownListFromDelta = (delta) => {
 /**
  * Handle streaming response
  */
-const handleStreamResponse = async (res, response, enable_thinking, enable_web_search, requestBody = null, toolcallEnabled = false) => {
+const handleStreamResponse = async (req, res, response, enable_thinking, enable_web_search, requestBody = null, toolcallEnabled = false) => {
     try {
         const message_id = generateUUID()
         const decoder = new TextDecoder('utf-8')
@@ -203,7 +219,9 @@ const handleStreamResponse = async (res, response, enable_thinking, enable_web_s
                         }
                     }
                 } catch (error) {
-                    logger.error('Stream data processing error', 'CHAT', '', error)
+                    logger.error('Stream data processing error', 'CHAT', '', buildRequestLogMeta(req, {
+                        error: error && error.message ? error.message : error
+                    }))
                 }
             }
         })
@@ -253,16 +271,20 @@ const handleStreamResponse = async (res, response, enable_thinking, enable_web_s
                 res.write(`data: [DONE]\n\n`)
                 res.end()
             } catch (e) {
-                logger.error('Stream response end error', 'CHAT', '', e)
+                logger.error('Stream response end error', 'CHAT', '', buildRequestLogMeta(req, {
+                    error: e && e.message ? e.message : e
+                }))
                 if (!res.headersSent) {
-                    res.status(500).json({ error: "Internal server error" })
+                    res.status(500).json(buildRequestErrorBody(req, 'Internal server error', 'chat_stream_finalize_failed'))
                 }
             }
         })
     } catch (error) {
-        logger.error('Chat processing error', 'CHAT', '', error)
+        logger.error('Chat processing error', 'CHAT', '', buildRequestLogMeta(req, {
+            error: error && error.message ? error.message : error
+        }))
         if (!res.headersSent) {
-            res.status(500).json({ error: "Internal server error" })
+            res.status(500).json(buildRequestErrorBody(req, 'Internal server error', 'chat_stream_processing_failed'))
         }
     }
 }
@@ -270,7 +292,7 @@ const handleStreamResponse = async (res, response, enable_thinking, enable_web_s
 /**
  * Handle non-streaming response (accumulate from stream)
  */
-const handleNonStreamResponse = async (res, response, enable_thinking, enable_web_search, model, requestBody = null, toolcallEnabled = false) => {
+const handleNonStreamResponse = async (req, res, response, enable_thinking, enable_web_search, model, requestBody = null, toolcallEnabled = false) => {
     try {
         const decoder = new TextDecoder('utf-8')
         let buffer = ''
@@ -356,7 +378,9 @@ const handleNonStreamResponse = async (res, response, enable_thinking, enable_we
                             fullContent += content
                         }
                     } catch (error) {
-                        logger.error('Non-stream data processing error', 'CHAT', '', error)
+                        logger.error('Non-stream data processing error', 'CHAT', '', buildRequestLogMeta(req, {
+                            error: error && error.message ? error.message : error
+                        }))
                     }
                 }
             })
@@ -407,8 +431,10 @@ const handleNonStreamResponse = async (res, response, enable_thinking, enable_we
             "usage": totalTokens
         })
     } catch (error) {
-        logger.error('Non-stream chat processing error', 'CHAT', '', error)
-        res.status(500).json({ error: "Internal server error" })
+        logger.error('Non-stream chat processing error', 'CHAT', '', buildRequestLogMeta(req, {
+            error: error && error.message ? error.message : error
+        }))
+        res.status(500).json(buildRequestErrorBody(req, 'Internal server error', 'chat_nonstream_processing_failed'))
     }
 }
 
@@ -424,21 +450,27 @@ const handleChatCompletion = async (req, res) => {
         const response_data = await sendChatRequest(req.body)
 
         if (!response_data.status || !response_data.response) {
-            res.status(500).json({ error: "Failed to send request" })
+            logger.error('Chat upstream request failed', 'CHAT', '', buildRequestLogMeta(req, {
+                model: model || null
+            }))
+            res.status(500).json(buildRequestErrorBody(req, 'Failed to send request', 'chat_upstream_request_failed'))
             return
         }
 
         if (stream) {
             setResponseHeaders(res, true)
-            await handleStreamResponse(res, response_data.response, enable_thinking, enable_web_search, req.body, req.toolcall_enabled)
+            await handleStreamResponse(req, res, response_data.response, enable_thinking, enable_web_search, req.body, req.toolcall_enabled)
         } else {
             setResponseHeaders(res, false)
-            await handleNonStreamResponse(res, response_data.response, enable_thinking, enable_web_search, model, req.body, req.toolcall_enabled)
+            await handleNonStreamResponse(req, res, response_data.response, enable_thinking, enable_web_search, model, req.body, req.toolcall_enabled)
         }
 
     } catch (error) {
-        logger.error('Chat processing error', 'CHAT', '', error)
-        res.status(500).json({ error: "Invalid token, request failed" })
+        logger.error('Chat processing error', 'CHAT', '', buildRequestLogMeta(req, {
+            error: error && error.message ? error.message : error,
+            model: model || null
+        }))
+        res.status(500).json(buildRequestErrorBody(req, 'Invalid token, request failed', 'chat_request_failed'))
     }
 }
 
