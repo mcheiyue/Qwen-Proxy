@@ -22,6 +22,7 @@ const saveResponseObject = (req, responseObject) => responseStoreApi.save(req, r
 const getStoredResponse = (req, responseId) => responseStoreApi.get(req, responseId)
 const deleteStoredResponse = (req, responseId) => responseStoreApi.remove(req, responseId)
 const listStoredResponses = (req, query = {}) => responseStoreApi.list(req, query)
+const PARTIAL_RESPONSE_SAVE_INTERVAL_MS = 1000
 
 function getResponseStoreStatus() {
   return {
@@ -633,6 +634,7 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
 function streamChatToResponses(res, response, model, responseId, requestBody = null, toolcallEnabled = false, req = null, responseMetadata = null) {
   return new Promise((resolve, reject) => {
     let settled = false
+    const createdAt = Math.round(Date.now() / 1000)
     const decoder = new TextDecoder('utf-8')
     let buffer = ''
     let textBuffer = ''
@@ -643,6 +645,8 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
     const outputItems = []
     let messageItem = null
     let messageContentPart = null
+    let lastPartialSaveAt = 0
+    let partialSaveInFlight = false
 
     const writeEvent = (event, data) => {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
@@ -826,7 +830,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
       const partialResponse = {
         id: responseId,
         object: 'response',
-        created_at: Math.round(Date.now() / 1000),
+        created_at: createdAt,
         status: 'in_progress',
         model,
         output,
@@ -835,6 +839,19 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         partialResponse.usage = buildResponseUsage(usage)
       }
       return partialResponse
+    }
+
+    const persistPartialResponse = (force = false) => {
+      if (settled || partialSaveInFlight) return
+      const now = Date.now()
+      if (!force && lastPartialSaveAt && now - lastPartialSaveAt < PARTIAL_RESPONSE_SAVE_INTERVAL_MS) return
+      partialSaveInFlight = true
+      lastPartialSaveAt = now
+      saveResponseObject(req, attachResponseMetadata(buildPartialStreamResponse(), responseMetadata))
+        .catch((error) => logger.warn('Responses partial snapshot save failed', 'RESPONSES', '', buildRequestLogMeta(req, { error: error && error.message ? error.message : error, model, response_id: responseId })))
+        .finally(() => {
+          partialSaveInFlight = false
+        })
     }
 
     const failStream = async (error) => {
@@ -875,12 +892,14 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
 
         try {
           const parsed = JSON.parse(data)
+          let partialChanged = false
           if (parsed.usage) {
             usage = {
               prompt_tokens: parsed.usage.prompt_tokens || usage.prompt_tokens,
               completion_tokens: parsed.usage.completion_tokens || usage.completion_tokens,
               total_tokens: parsed.usage.total_tokens || usage.total_tokens,
             }
+            partialChanged = true
           }
 
           if (!Array.isArray(parsed.choices) || parsed.choices.length === 0) continue
@@ -889,20 +908,33 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
 
           if (delta.reasoning_content) {
             emitReasoningText(delta.reasoning_content)
+            partialChanged = true
           }
 
           if (delta.content) {
             if (sieve) {
               const out = sieve.push(delta.content)
-              if (out.textDelta) emitOutputText(out.textDelta)
-              if (out.toolCallsDelta) emitToolCalls(out.toolCallsDelta)
+              if (out.textDelta) {
+                emitOutputText(out.textDelta)
+                partialChanged = true
+              }
+              if (out.toolCallsDelta) {
+                emitToolCalls(out.toolCallsDelta)
+                partialChanged = true
+              }
             } else {
               emitOutputText(delta.content)
+              partialChanged = true
             }
           }
 
           if (Array.isArray(delta.tool_calls)) {
             emitToolCalls(delta.tool_calls)
+            partialChanged = true
+          }
+
+          if (partialChanged) {
+            persistPartialResponse()
           }
         } catch (error) {
           logger.debug('Responses stream JSON chunk parse skipped', 'RESPONSES', '', buildRequestLogMeta(req, { error: error && error.message ? error.message : error }))
@@ -917,6 +949,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
           const out = sieve.flush()
           if (out.textDelta) emitOutputText(out.textDelta)
           if (out.toolCallsDelta) emitToolCalls(out.toolCallsDelta)
+          if (out.textDelta || out.toolCallsDelta) persistPartialResponse(true)
         }
 
         const output = []
