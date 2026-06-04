@@ -1,5 +1,7 @@
 const express = require('express')
 const router = express.Router()
+const fs = require('fs')
+const path = require('path')
 
 const { apiKeyVerify } = require('../middlewares/authorization.js')
 const { processRequestBody } = require('../middlewares/chat-middleware.js')
@@ -23,6 +25,39 @@ const getStoredResponse = (req, responseId) => responseStoreApi.get(req, respons
 const deleteStoredResponse = (req, responseId) => responseStoreApi.remove(req, responseId)
 const listStoredResponses = (req, query = {}) => responseStoreApi.list(req, query)
 const PARTIAL_RESPONSE_SAVE_INTERVAL_MS = 1000
+
+function createResponseInputTrace(trace, entry) {
+  if (!Array.isArray(trace) || !entry || typeof entry !== 'object') return
+  trace.push(entry)
+}
+
+function shouldDebugDumpResponses(req, body, metadata) {
+  if (config.responsesDebugDump) return true
+  if (metadata?.debug_trace === true) return true
+  if (body?.debug_trace === true) return true
+  if (req?.headers?.['x-responses-debug-dump'] === 'true') return true
+  return false
+}
+
+function getResponsesDebugDir() {
+  return path.resolve(process.cwd(), config.responsesDebugDumpDir)
+}
+
+function writeResponsesDebugDump(req, stage, payload) {
+  const requestId = req?.requestId || `responses_${Date.now()}`
+  const dumpDir = getResponsesDebugDir()
+  const filePath = path.join(dumpDir, `${requestId}.${stage}.json`)
+  try {
+    fs.mkdirSync(dumpDir, { recursive: true })
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8')
+  } catch (error) {
+    logger.warn('Responses debug dump failed', 'RESPONSES', '', buildRequestLogMeta(req, {
+      stage,
+      file_path: filePath,
+      error: error && error.message ? error.message : error,
+    }))
+  }
+}
 
 function getResponseStoreStatus() {
   return {
@@ -116,7 +151,7 @@ function convertResponseToolOutputItem(item) {
   }
 }
 
-function normalizeResponseContentPart(part) {
+function normalizeResponseContentPart(part, options = {}) {
   if (!part || typeof part !== 'object') return null
 
   if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
@@ -125,6 +160,15 @@ function normalizeResponseContentPart(part) {
   }
 
   if (part.type === 'reasoning' && Array.isArray(part.summary)) {
+    if (!options.allowReasoningReplay) {
+      createResponseInputTrace(options.trace, {
+        action: 'drop',
+        source: 'content_part',
+        type: part.type,
+        reason: 'reasoning_replay_disabled',
+      })
+      return null
+    }
     const text = part.summary
       .map((item) => (item && item.type === 'summary_text' && typeof item.text === 'string') ? item.text : '')
       .filter(Boolean)
@@ -204,7 +248,7 @@ function buildUserMessageFromParts(parts) {
   }
 }
 
-function flattenResponseInput(input) {
+function flattenResponseInput(input, options = {}) {
   if (typeof input === 'string') {
     return [{ role: 'user', content: input }]
   }
@@ -236,25 +280,55 @@ function flattenResponseInput(input) {
 
     if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output' || item.type === 'local_shell_call_output' || item.type === 'shell_call_output' || item.type === 'tool_result') {
       flushPendingUserParts()
-      messages.push(convertResponseToolOutputItem(item))
+      if (options.allowTopLevelToolReplay) {
+        messages.push(convertResponseToolOutputItem(item))
+        createResponseInputTrace(options.trace, {
+          action: 'keep',
+          source: 'top_level',
+          type: item.type,
+          mapped_role: 'tool',
+        })
+      } else {
+        createResponseInputTrace(options.trace, {
+          action: 'drop',
+          source: 'top_level',
+          type: item.type,
+          reason: 'top_level_tool_replay_disabled',
+        })
+      }
       continue
     }
 
     if (item.type === 'function_call' || item.type === 'custom_tool_call' || item.type === 'local_shell_call' || item.type === 'shell_call') {
       flushPendingUserParts()
-      messages.push(convertResponseToolCallItem(item))
+      if (options.allowTopLevelToolReplay) {
+        messages.push(convertResponseToolCallItem(item))
+        createResponseInputTrace(options.trace, {
+          action: 'keep',
+          source: 'top_level',
+          type: item.type,
+          mapped_role: 'assistant_tool_call',
+        })
+      } else {
+        createResponseInputTrace(options.trace, {
+          action: 'drop',
+          source: 'top_level',
+          type: item.type,
+          reason: 'top_level_tool_replay_disabled',
+        })
+      }
       continue
     }
 
     if (item.type === 'input_text' || item.type === 'input_image' || item.type === 'image' || item.type === 'image_url' || item.type === 'input_file') {
-      const normalized = normalizeResponseContentPart(item)
+      const normalized = normalizeResponseContentPart(item, options)
       if (normalized?.item) {
         pendingUserParts.push(normalized.item)
       }
       continue
     }
 
-    if (item.type === 'message') {
+    if (item.type === 'message' || item.role) {
       flushPendingUserParts()
       const role = item.role === 'developer' ? 'system' : (item.role || 'user')
       if (!Array.isArray(item.content)) {
@@ -262,11 +336,18 @@ function flattenResponseInput(input) {
           role,
           content: typeof item.content === 'string' ? item.content : '',
         })
+        createResponseInputTrace(options.trace, {
+          action: 'keep',
+          source: 'message',
+          type: item.type,
+          role,
+          content_kind: typeof item.content,
+        })
         continue
       }
 
       const normalizedParts = item.content
-        .map((part) => normalizeResponseContentPart(part))
+        .map((part) => normalizeResponseContentPart(part, options))
         .filter(Boolean)
 
       if (role === 'assistant') {
@@ -287,9 +368,35 @@ function flattenResponseInput(input) {
             }
           }))
         if (toolCalls.length > 0) {
-          message.tool_calls = toolCalls
+          if (options.allowAssistantToolReplay) {
+            message.tool_calls = toolCalls
+          } else {
+            createResponseInputTrace(options.trace, {
+              action: 'drop',
+              source: 'assistant_message',
+              type: 'tool_call',
+              count: toolCalls.length,
+              reason: 'assistant_tool_replay_disabled',
+            })
+          }
         }
-        messages.push(message)
+        if (message.content || Array.isArray(message.tool_calls)) {
+          messages.push(message)
+          createResponseInputTrace(options.trace, {
+            action: 'keep',
+            source: 'assistant_message',
+            type: item.type,
+            content_length: message.content ? message.content.length : 0,
+            tool_call_count: Array.isArray(message.tool_calls) ? message.tool_calls.length : 0,
+          })
+        } else {
+          createResponseInputTrace(options.trace, {
+            action: 'drop',
+            source: 'assistant_message',
+            type: item.type,
+            reason: 'assistant_message_empty_after_sanitization',
+          })
+        }
         continue
       }
 
@@ -298,32 +405,85 @@ function flattenResponseInput(input) {
         .map((part) => part.item)
         .filter(Boolean)
       if (toolResults.length > 0) {
-        messages.push(...toolResults)
+        if (options.allowTopLevelToolReplay) {
+          messages.push(...toolResults)
+          createResponseInputTrace(options.trace, {
+            action: 'keep',
+            source: 'message',
+            type: 'tool_result',
+            count: toolResults.length,
+            role,
+          })
+        } else {
+          createResponseInputTrace(options.trace, {
+            action: 'drop',
+            source: 'message',
+            type: 'tool_result',
+            count: toolResults.length,
+            role,
+            reason: 'top_level_tool_replay_disabled',
+          })
+        }
         continue
       }
 
       const contentItems = normalizedParts.map((part) => part.item).filter(Boolean)
-      messages.push({
+      const normalizedMessage = {
         role,
         content: contentItems.some((part) => part.type !== 'text')
           ? contentItems
           : contentItems.map((part) => part.text || '').filter(Boolean).join('\n\n'),
-      })
+      }
+      if ((Array.isArray(normalizedMessage.content) && normalizedMessage.content.length > 0) || (typeof normalizedMessage.content === 'string' && normalizedMessage.content)) {
+        messages.push(normalizedMessage)
+        createResponseInputTrace(options.trace, {
+          action: 'keep',
+          source: 'message',
+          type: item.type,
+          role,
+          content_mode: Array.isArray(normalizedMessage.content) ? 'rich' : 'text',
+          content_count: Array.isArray(normalizedMessage.content) ? normalizedMessage.content.length : normalizedMessage.content.length,
+        })
+      } else {
+        createResponseInputTrace(options.trace, {
+          action: 'drop',
+          source: 'message',
+          type: item.type,
+          role,
+          reason: 'message_empty_after_sanitization',
+        })
+      }
       continue
     }
 
     flushPendingUserParts()
-    messages.push({
-      role: item.role || 'user',
-      content: typeof item.content === 'string' ? item.content : '',
-    })
+    if (typeof item.content === 'string' && item.content) {
+      messages.push({
+        role: item.role || 'user',
+        content: item.content,
+      })
+      createResponseInputTrace(options.trace, {
+        action: 'keep',
+        source: 'fallback',
+        type: item.type || 'unknown',
+        role: item.role || 'user',
+      })
+    } else {
+      createResponseInputTrace(options.trace, {
+        action: 'drop',
+        source: 'fallback',
+        type: item.type || 'unknown',
+        role: item.role || 'user',
+        reason: 'unsupported_non_string_item',
+      })
+    }
   }
 
   flushPendingUserParts()
   return messages
 }
 
-function responsesToOpenAIBody(body) {
+function responsesToOpenAIBody(body, options = {}) {
   return {
     model: body.model,
     stream: Boolean(body.stream),
@@ -333,7 +493,12 @@ function responsesToOpenAIBody(body) {
     instructions: body.instructions,
     messages: [
       ...(body.instructions ? [{ role: 'system', content: body.instructions }] : []),
-      ...flattenResponseInput(body.input),
+      ...flattenResponseInput(body.input, {
+        trace: options.trace,
+        allowTopLevelToolReplay: config.responsesAllowTopLevelToolReplay,
+        allowAssistantToolReplay: config.responsesAllowAssistantToolReplay,
+        allowReasoningReplay: config.responsesAllowReasoningReplay,
+      }),
     ],
   }
 }
@@ -1071,8 +1236,35 @@ async function handleResponses(req, res) {
     const responseMetadata = requestedBody?.metadata && typeof requestedBody.metadata === 'object' && !Array.isArray(requestedBody.metadata)
       ? { ...requestedBody.metadata }
       : null
+    const debugDumpEnabled = shouldDebugDumpResponses(req, requestedBody, responseMetadata)
+    const normalizationTrace = []
     req.responses_metadata = responseMetadata
-    const openaiBody = responsesToOpenAIBody(requestedBody)
+    if (debugDumpEnabled) {
+      writeResponsesDebugDump(req, 'raw', {
+        request_id: req?.requestId || null,
+        model: requestedBody?.model || null,
+        stream: Boolean(requestedBody?.stream),
+        tool_choice: requestedBody?.tool_choice,
+        parallel_tool_calls: requestedBody?.parallel_tool_calls,
+        instructions: requestedBody?.instructions,
+        metadata: responseMetadata,
+        input: requestedBody?.input,
+      })
+    }
+    const openaiBody = responsesToOpenAIBody(requestedBody, { trace: normalizationTrace })
+    if (debugDumpEnabled) {
+      writeResponsesDebugDump(req, 'normalized', {
+        request_id: req?.requestId || null,
+        model: openaiBody?.model || null,
+        stream: Boolean(openaiBody?.stream),
+        tool_choice: openaiBody?.tool_choice,
+        parallel_tool_calls: openaiBody?.parallel_tool_calls,
+        instructions: openaiBody?.instructions,
+        tools_count: Array.isArray(openaiBody?.tools) ? openaiBody.tools.length : 0,
+        messages: openaiBody?.messages,
+        trace: normalizationTrace,
+      })
+    }
     req.body = openaiBody
 
     await new Promise((resolve, reject) => {
