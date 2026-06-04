@@ -64,8 +64,29 @@ const parseEmailList = (raw) => {
 
 const { apiKeys, adminKey } = parseApiKeys()
 
+const normalizeResponsesStoreBackend = () => {
+  const raw = String(process.env.RESPONSES_STORE_BACKEND || '').trim().toLowerCase()
+  if (raw === 'file' || raw === 'memory' || raw === 'redis') {
+    return raw
+  }
+  if (process.env.DATA_SAVE_MODE === 'redis') {
+    return 'redis'
+  }
+  return process.env.DATA_SAVE_MODE === 'file' ? 'file' : 'memory'
+}
+
 const config = {
     dataSaveMode: process.env.DATA_SAVE_MODE || "none",
+    defaultModel: process.env.DEFAULT_MODEL || 'qwen3.6-plus',
+    cliCoderModel: process.env.CLI_CODER_MODEL || 'qwen3-coder-plus',
+    enableResponsesApi: process.env.ENABLE_RESPONSES_API === 'false' ? false : true,
+    enableCliApi: process.env.ENABLE_CLI_API === 'false' ? false : true,
+    responsesStoreBackend: normalizeResponsesStoreBackend(),
+    responsesStoreTtlSeconds: Math.max(60, parseInt(process.env.RESPONSES_STORE_TTL_SECONDS) || 1800),
+    responsesStoreFile: process.env.RESPONSES_STORE_FILE || './data/responses-store.json',
+    responsesStoreRedisKey: process.env.RESPONSES_STORE_REDIS_KEY || 'qwen2api:responses',
+    toolResultMaxChars: Math.max(0, parseInt(process.env.TOOL_RESULT_MAX_CHARS) || 12000),
+    toolResultTailChars: Math.max(0, parseInt(process.env.TOOL_RESULT_TAIL_CHARS) || 2000),
     apiKeys: apiKeys,
     adminKey: adminKey,
     batchLoginConcurrency: Math.max(1, parseInt(process.env.BATCH_LOGIN_CONCURRENCY) || 5),

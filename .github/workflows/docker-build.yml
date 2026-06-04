@@ -5,11 +5,23 @@ on:
     branches: [ main, develop ]
     tags: [ 'v*' ]
     paths:
-      - 'package.json'  
+      - 'src/**'
+      - 'webui/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/docker-build.yml'
   pull_request:
     branches: [ main ]
     paths:
+      - 'src/**'
+      - 'webui/**'
       - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/docker-build.yml'
   workflow_dispatch:
 
 jobs:
@@ -19,10 +31,27 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+        cache-dependency-path: |
+          package-lock.json
+          webui/package-lock.json
     
     - name: Record build start time
       id: start-time
       run: echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
+
+    - name: Install backend production dependencies
+      run: npm ci --omit=dev
+
+    - name: Install and build webui
+      run: |
+        npm ci --prefix webui
+        npm run build --prefix webui
     
     # 📦 从package.json读取name和version
     - name: Extract package.json metadata
@@ -73,7 +102,11 @@ jobs:
       id: tags
       run: |
         # 使用package.json的name（清理后）作为镜像名
-        DOCKERHUB_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ steps.package-info.outputs.clean_name }}"
+        DOCKERHUB_OWNER="${{ secrets.DOCKERHUB_USERNAME }}"
+        if [ -z "$DOCKERHUB_OWNER" ]; then
+          DOCKERHUB_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+        fi
+        DOCKERHUB_REPO="${DOCKERHUB_OWNER}/${{ steps.package-info.outputs.clean_name }}"
         
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           # PR: 只生成PR标签用于测试
@@ -94,6 +127,36 @@ jobs:
         echo "tags=${TAGS}" >> $GITHUB_OUTPUT
         echo "🏷️ Docker repository: ${DOCKERHUB_REPO}"
         echo "🏷️ Generated tags: ${TAGS}"
+
+    - name: Build local smoke image
+      run: docker build -t local/qwen-proxy-smoke:${{ github.sha }} .
+
+    - name: Smoke test container health
+      run: |
+        docker run -d --name qwen-proxy-smoke -p 13000:3000 \
+          -e API_KEY=test-key \
+          -e DATA_SAVE_MODE=none \
+          -e ENABLE_RESPONSES_API=true \
+          -e ENABLE_CLI_API=true \
+          local/qwen-proxy-smoke:${{ github.sha }}
+
+        for i in $(seq 1 20); do
+          if curl --fail --silent http://127.0.0.1:13000/health > /tmp/qwen-proxy-health.json; then
+            break
+          fi
+          sleep 2
+        done
+
+        grep '"status":"ok"' /tmp/qwen-proxy-health.json
+        grep '"service":"qwen-proxy"' /tmp/qwen-proxy-health.json
+
+    - name: Show smoke test logs on failure
+      if: failure()
+      run: docker logs qwen-proxy-smoke
+
+    - name: Cleanup smoke test container
+      if: always()
+      run: docker rm -f qwen-proxy-smoke || true
     
     # 🏗️ 构建和推送
     - name: Build and push multi-architecture image

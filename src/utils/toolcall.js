@@ -1,5 +1,7 @@
 'use strict'
 
+const config = require('../config/index.js')
+
 /**
  * DSML tool-call adapter for Qwen.
  * Inspired by github.com/CJackHwang/ds2api (Go); minimal Node port.
@@ -81,18 +83,70 @@ function deobfuscateToolName(name) {
 }
 
 /* ---------------- prompt build ---------------- */
+function compressSchemaType(schema, depth = 0) {
+  if (!schema || typeof schema !== 'object') return 'any'
+  if (depth >= 3) return schema.type || 'any'
+
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+    return schema.enum.map(v => JSON.stringify(v)).join(' | ')
+  }
+
+  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+    return schema.oneOf.map(item => compressSchemaType(item, depth + 1)).join(' | ')
+  }
+
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
+    return schema.anyOf.map(item => compressSchemaType(item, depth + 1)).join(' | ')
+  }
+
+  if (Array.isArray(schema.type)) {
+    return schema.type
+      .map(type => compressSchemaType({ ...schema, type }, depth + 1))
+      .join(' | ')
+  }
+
+  switch (schema.type) {
+    case 'array': {
+      const itemType = compressSchemaType(schema.items, depth + 1)
+      return `${itemType}[]`
+    }
+    case 'object': {
+      const props = schema.properties
+      if (!props || typeof props !== 'object' || Array.isArray(props)) return 'object'
+      const required = new Set(Array.isArray(schema.required) ? schema.required : [])
+      const fields = Object.entries(props).map(([key, value]) => {
+        const optional = required.has(key) ? '' : '?'
+        return `${key}${optional}: ${compressSchemaType(value, depth + 1)}`
+      })
+      return `{ ${fields.join('; ')} }`
+    }
+    case 'integer':
+      return 'integer'
+    case 'number':
+    case 'boolean':
+    case 'string':
+    case 'null':
+      return schema.type
+    default:
+      return schema.type || 'any'
+  }
+}
+
+function compressToolDefinition(tool) {
+  const fn = tool.function || tool || {}
+  const originalName = fn.name || ''
+  const name = obfuscateToolName(originalName)
+  const desc = String(fn.description || '').trim()
+  const params = fn.parameters || fn.input_schema || { type: 'object', properties: {} }
+  const signature = compressSchemaType(params)
+  return desc
+    ? `- ${name}(input: ${signature})\n  ${desc}`
+    : `- ${name}(input: ${signature})`
+}
+
 function buildToolPromptBlock(tools) {
   const toolList = tools || []
-  const decls = toolList.map(t => {
-    const fn = t.function || t
-    const originalName = (fn && fn.name) || ''
-    const name = obfuscateToolName(originalName)
-    const desc = (fn && fn.description) || ''
-    const params = fn && (fn.parameters || fn.input_schema)
-    let paramsBlock = '{}'
-    if (params) { try { paramsBlock = JSON.stringify(params) } catch { /* keep default */ } }
-    return `- ${name}: ${desc}\n  parameters: ${paramsBlock}`
-  }).join('\n')
+  const decls = toolList.map(compressToolDefinition).join('\n')
 
   // Enumerate every tool name once at the top AND once at the bottom.
   // Larger Qwen variants (notably qwen3.6-plus) sometimes refuse with
@@ -120,13 +174,13 @@ function buildToolPromptBlock(tools) {
     '1. Wrap one or more <|DSML|invoke> in a single <|DSML|tool_calls> block.',
     '2. String parameters MUST use <![CDATA[...]]>. Numbers / booleans / null are plain text.',
     '3. Object parameters: nest XML elements inside the <|DSML|parameter>. Arrays: repeat <item>.',
-    '4. Use only parameter names from the schemas below.',
+    '4. Use only parameter names and value shapes from the signatures below.',
     '5. Do NOT wrap in markdown fences. Do NOT explain.',
     '6. If you call a tool, the block must be the last thing you output.',
     `7. EVERY tool listed above (${namesLine}) IS REAL and IS available right now. Do NOT respond with "tool X does not exist" — that response is incorrect. If a user asks you to call a tool by name and that name is in the whitelist, call it. If you are uncertain about the parameters, fill in the best-guess values matching the schema rather than refusing.`,
     '8. Tool names are case-sensitive. Use the exact spelling from the whitelist above.',
     '',
-    'Tools available (full schemas):',
+    'Tools available (compact signatures):',
     decls,
   ].join('\n')
 }
@@ -151,6 +205,95 @@ function serializeAssistantToolCalls(toolCalls) {
   return TC_OPEN + '\n' + blocks.join('\n') + '\n' + TC_CLOSE
 }
 
+function truncateHeadTail(content, maxChars, tailChars, label) {
+  let safeTailChars = Math.max(0, Math.min(tailChars, Math.floor(maxChars / 3)))
+  let headChars = Math.max(maxChars - safeTailChars, 0)
+  let notice = ''
+
+  for (let i = 0; i < 3; i++) {
+    notice = `\n[TRUNCATED ${label}: original_length=${content.length}, kept_head=${headChars}, kept_tail=${safeTailChars}]\n`
+    headChars = Math.max(maxChars - safeTailChars - notice.length, 0)
+    safeTailChars = Math.max(0, Math.min(safeTailChars, maxChars - headChars - notice.length))
+  }
+
+  if (headChars === 0 && safeTailChars === 0) {
+    return content.slice(0, maxChars)
+  }
+
+  if (headChars + safeTailChars + notice.length >= content.length) {
+    return content
+  }
+
+  const head = content.slice(0, headChars)
+  const tail = safeTailChars > 0 ? content.slice(-safeTailChars) : ''
+  return head + notice + tail
+}
+
+function truncateJsonLikeContent(content, maxChars, tailChars) {
+  const trimmed = content.trim()
+  if (!trimmed || !/^[\[{]/.test(trimmed)) return null
+
+  const repaired = tryJsonRepair(trimmed)
+  if (repaired === undefined) return null
+
+  let compact = ''
+  try {
+    compact = JSON.stringify(repaired)
+  } catch {
+    return null
+  }
+
+  if (typeof compact !== 'string' || compact.length === 0) return null
+  if (compact.length <= maxChars) return compact
+  return truncateHeadTail(compact, maxChars, tailChars, 'tool_result_json')
+}
+
+function truncateMultilineContent(content, maxChars) {
+  if (!/[\r\n]/.test(content)) return null
+  const lines = content.split(/\r?\n/)
+  if (lines.length < 8) return null
+
+  const head = []
+  const tail = []
+  let headIdx = 0
+  let tailIdx = lines.length - 1
+  let takeHead = true
+
+  while (headIdx <= tailIdx) {
+    const target = takeHead ? lines[headIdx++] : lines[tailIdx--]
+    const omitted = Math.max(0, tailIdx - headIdx + 1)
+    const notice = `[TRUNCATED tool_result_lines: original_lines=${lines.length}, omitted_lines=${omitted}]`
+    const candidate = [...head, ...(takeHead ? [target] : []), notice, ...(takeHead ? tail : [target, ...tail])].join('\n')
+    if (candidate.length > maxChars) break
+    if (takeHead) head.push(target)
+    else tail.unshift(target)
+    takeHead = !takeHead
+  }
+
+  const omittedLines = Math.max(0, tailIdx - headIdx + 1)
+  if (omittedLines <= 0) return content
+  const notice = `[TRUNCATED tool_result_lines: original_lines=${lines.length}, omitted_lines=${omittedLines}]`
+  const merged = [...head, notice, ...tail].join('\n')
+  if (merged.length <= maxChars) return merged
+  return null
+}
+
+function truncateToolResultContent(content) {
+  const maxChars = Number(config.toolResultMaxChars) || 0
+  if (maxChars <= 0 || typeof content !== 'string' || content.length <= maxChars) {
+    return content
+  }
+
+  const tailChars = Number(config.toolResultTailChars) || 0
+  const jsonResult = truncateJsonLikeContent(content, maxChars, tailChars)
+  if (jsonResult) return jsonResult
+
+  const multilineResult = truncateMultilineContent(content, maxChars)
+  if (multilineResult) return multilineResult
+
+  return truncateHeadTail(content, maxChars, tailChars, 'tool_result')
+}
+
 function serializeToolResult(msg) {
   const id = (msg && msg.tool_call_id) || ''
   let content = msg && msg.content
@@ -158,6 +301,7 @@ function serializeToolResult(msg) {
   if (typeof content !== 'string') {
     try { content = JSON.stringify(content) } catch { content = String(content) }
   }
+  content = truncateToolResultContent(content)
   return `<|DSML|tool_result tool_use_id="${escapeAttr(id)}"><![CDATA[${escapeCDATA(content)}]]></|DSML|tool_result>`
 }
 

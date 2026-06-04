@@ -4,6 +4,7 @@ const router = express.Router()
 const { apiKeyVerify } = require('../middlewares/authorization.js')
 const { processRequestBody } = require('../middlewares/chat-middleware.js')
 const { handleChatCompletion } = require('../controllers/chat.js')
+const config = require('../config/index.js')
 const {
     handleImageVideoCompletion,
     handleOpenAIImagesGeneration,
@@ -41,6 +42,14 @@ router.post('/v1/chat/completions',
     processRequestBody,
     selectChatCompletion
 )
+
+if (config.enableCliApi) {
+    router.post('/cli/v1/chat/completions',
+        apiKeyVerify,
+        processRequestBody,
+        selectChatCompletion
+    )
+}
 
 router.post('/v1/images/generations',
     apiKeyVerify,

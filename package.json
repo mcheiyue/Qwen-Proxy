@@ -1,7 +1,7 @@
 {
-  "name": "qwen-proxy",
+  "name": "qwen-proxy-heiyue",
   "version": "1.1.2",
-  "description": "Qwen-Proxy — OpenAI / Anthropic / Gemini three-protocol gateway in front of chat.qwen.ai",
+  "description": "Heiyue fork of Qwen-Proxy — OpenAI / Anthropic / Gemini gateway in front of chat.qwen.ai",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/start.js",
@@ -17,8 +17,12 @@
     "serverless",
     "vercel"
   ],
-  "author": "",
+  "author": "mcheiyue",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcheiyue/Qwen-Proxy.git"
+  },
   "dependencies": {
     "ali-oss": "^6.22.0",
     "axios": "^1.11.0",

@@ -6,6 +6,22 @@ const { JwtDecode } = require('../utils/tools')
 const { adminKeyVerify } = require('../middlewares/authorization')
 const { syncProxiesToVercel, syncDisabledAccountsToVercel, syncAccountsToVercel } = require('../utils/vercel-sync')
 
+const buildRequestLogMeta = (req, extra = null) => {
+  const meta = {
+    request_id: req?.requestId || null
+  }
+  if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+    Object.assign(meta, extra)
+  }
+  return meta
+}
+
+const buildRequestErrorBody = (req, message, code) => ({
+  error: message,
+  code,
+  request_id: req?.requestId || null
+})
+
 /**
  * GET /getAllAccounts - Get all accounts (paginated)
  */
@@ -41,8 +57,8 @@ router.get('/getAllAccounts', adminKeyVerify, async (req, res) => {
 
     res.json({ total, page, pageSize, data: accounts })
   } catch (error) {
-    logger.error('Failed to get account list', 'ACCOUNT', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to get account list', 'ACCOUNT', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'account_list_failed'))
   }
 })
 
@@ -60,17 +76,17 @@ router.post('/setAccount', adminKeyVerify, async (req, res) => {
     const { email, password } = req.body
 
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Email and password are required', 'account_missing_credentials'))
     }
 
     const exists = accountManager.accountTokens.find(item => item.email === email)
     if (exists) {
-      return res.status(409).json({ error: 'Account already exists' })
+      return res.status(409).json(buildRequestErrorBody(req, 'Account already exists', 'account_already_exists'))
     }
 
     const authToken = await accountManager.login(email, password)
     if (!authToken) {
-      return res.status(401).json({ error: 'Login failed' })
+      return res.status(401).json(buildRequestErrorBody(req, 'Login failed', 'account_login_failed'))
     }
 
     const decoded = JwtDecode(authToken)
@@ -84,11 +100,11 @@ router.post('/setAccount', adminKeyVerify, async (req, res) => {
       // batch changes and manually sync via the Vercel page button.
       res.status(200).json({ email, message: 'Account created successfully' })
     } else {
-      res.status(500).json({ error: 'Account creation failed' })
+      res.status(500).json(buildRequestErrorBody(req, 'Account creation failed', 'account_creation_failed'))
     }
   } catch (error) {
-    logger.error('Failed to create account', 'ACCOUNT', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to create account', 'ACCOUNT', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'account_create_exception'))
   }
 })
 
@@ -101,7 +117,7 @@ router.delete('/deleteAccount', adminKeyVerify, async (req, res) => {
 
     const exists = accountManager.accountTokens.find(item => item.email === email)
     if (!exists) {
-      return res.status(404).json({ error: 'Account not found' })
+      return res.status(404).json(buildRequestErrorBody(req, 'Account not found', 'account_not_found'))
     }
 
     const success = accountManager.deleteAccount(email)
@@ -110,11 +126,11 @@ router.delete('/deleteAccount', adminKeyVerify, async (req, res) => {
       // NOTE: no auto Vercel sync — see /setAccount comment above.
       res.json({ message: 'Account deleted successfully' })
     } else {
-      res.status(500).json({ error: 'Account deletion failed' })
+      res.status(500).json(buildRequestErrorBody(req, 'Account deletion failed', 'account_deletion_failed'))
     }
   } catch (error) {
-    logger.error('Failed to delete account', 'ACCOUNT', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to delete account', 'ACCOUNT', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'account_delete_exception'))
   }
 })
 
@@ -126,12 +142,12 @@ router.post('/refreshAccount', adminKeyVerify, async (req, res) => {
     const { email } = req.body
 
     if (!email) {
-      return res.status(400).json({ error: 'Email is required' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Email is required', 'account_email_required'))
     }
 
     const exists = accountManager.accountTokens.find(item => item.email === email)
     if (!exists) {
-      return res.status(404).json({ error: 'Account not found' })
+      return res.status(404).json(buildRequestErrorBody(req, 'Account not found', 'account_not_found'))
     }
 
     const success = await accountManager.refreshAccountToken(email)
@@ -139,11 +155,11 @@ router.post('/refreshAccount', adminKeyVerify, async (req, res) => {
     if (success) {
       res.json({ message: 'Account token refreshed successfully', email })
     } else {
-      res.status(500).json({ error: 'Account token refresh failed' })
+      res.status(500).json(buildRequestErrorBody(req, 'Account token refresh failed', 'account_refresh_failed'))
     }
   } catch (error) {
-    logger.error('Failed to refresh account token', 'ACCOUNT', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to refresh account token', 'ACCOUNT', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'account_refresh_exception'))
   }
 })
 
@@ -161,8 +177,8 @@ router.post('/refreshAllAccounts', adminKeyVerify, async (req, res) => {
       thresholdHours
     })
   } catch (error) {
-    logger.error('Failed to batch refresh account tokens', 'ACCOUNT', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to batch refresh account tokens', 'ACCOUNT', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'account_batch_refresh_exception'))
   }
 })
 
@@ -182,17 +198,17 @@ router.post('/disableAccount', adminKeyVerify, async (req, res) => {
   try {
     const { email, disabled } = req.body || {}
     if (!email || typeof email !== 'string') {
-      return res.status(400).json({ error: 'Missing email' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Missing email', 'account_email_missing'))
     }
     const ok = await accountManager.setAccountDisabled(email, !!disabled)
     if (!ok) {
-      return res.status(404).json({ error: `Account not found: ${email}` })
+      return res.status(404).json(buildRequestErrorBody(req, `Account not found: ${email}`, 'account_not_found'))
     }
     // No auto Vercel sync — operator triggers it from the Vercel page.
     res.json({ success: true, email, disabled: !!disabled })
   } catch (error) {
-    logger.error('Failed to toggle account disabled', 'ACCOUNT', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to toggle account disabled', 'ACCOUNT', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'account_disable_exception'))
   }
 })
 
@@ -206,8 +222,8 @@ router.get('/proxy/status', adminKeyVerify, async (req, res) => {
     const list = accountManager.getProxyStatus()
     res.json({ total: list.length, data: list })
   } catch (error) {
-    logger.error('Failed to load proxy status', 'PROXY', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to load proxy status', 'PROXY', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'proxy_status_exception'))
   }
 })
 
@@ -225,18 +241,18 @@ router.post('/proxy/add', adminKeyVerify, async (req, res) => {
   try {
     const { url } = req.body || {}
     if (!url || typeof url !== 'string') {
-      return res.status(400).json({ error: 'Missing url' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Missing url', 'proxy_url_missing'))
     }
     if (!accountManager.proxyPool) {
-      return res.status(400).json({ error: 'Proxy pool not initialized' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Proxy pool not initialized', 'proxy_pool_uninitialized'))
     }
     const ok = await accountManager.proxyPool.addProxy(url.trim())
     // Persistence (file/redis) handled inside addProxy. No auto Vercel
     // sync — operator triggers it from the Vercel page.
     res.json({ success: ok, url })
   } catch (error) {
-    logger.error('Failed to add proxy', 'PROXY', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to add proxy', 'PROXY', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'proxy_add_exception'))
   }
 })
 
@@ -248,16 +264,16 @@ router.delete('/proxy', adminKeyVerify, async (req, res) => {
   try {
     const { url } = req.body || {}
     if (!url || typeof url !== 'string') {
-      return res.status(400).json({ error: 'Missing url' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Missing url', 'proxy_url_missing'))
     }
     if (!accountManager.proxyPool) {
-      return res.status(400).json({ error: 'Proxy pool not initialized' })
+      return res.status(400).json(buildRequestErrorBody(req, 'Proxy pool not initialized', 'proxy_pool_uninitialized'))
     }
     const ok = await accountManager.proxyPool.removeProxy(url)
     res.json({ success: ok, url })
   } catch (error) {
-    logger.error('Failed to remove proxy', 'PROXY', '', error)
-    res.status(500).json({ error: error.message })
+    logger.error('Failed to remove proxy', 'PROXY', '', buildRequestLogMeta(req, { error: error?.message || error }))
+    res.status(500).json(buildRequestErrorBody(req, error.message, 'proxy_remove_exception'))
   }
 })
 
