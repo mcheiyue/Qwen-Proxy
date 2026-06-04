@@ -49,6 +49,72 @@ function buildRouteErrorBody(req, message, code) {
   }
 }
 
+function stringifyResponseContent(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyResponseContent(item)).filter(Boolean).join('\n')
+  }
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text
+    if (typeof value.output === 'string') return value.output
+    if (value.content !== undefined) return stringifyResponseContent(value.content)
+    return JSON.stringify(value)
+  }
+  return String(value)
+}
+
+function getResponseToolName(item) {
+  const itemType = String(item?.type || '')
+  if (itemType === 'local_shell_call') return 'local_shell'
+  if (itemType === 'shell_call') return 'shell'
+  if (itemType === 'custom_tool_call') return String(item.name || 'custom_tool')
+  return String(item?.name || '')
+}
+
+function getResponseToolArguments(item) {
+  const itemType = String(item?.type || '')
+  if (itemType === 'local_shell_call' || itemType === 'shell_call') {
+    const action = item && typeof item.action === 'object' && !Array.isArray(item.action) ? item.action : {}
+    return {
+      command: action.command || item.command || item.input || '',
+      timeout_ms: action.timeout_ms || item.timeout_ms,
+      working_directory: action.working_directory || item.working_directory,
+      env: action.env || item.env,
+    }
+  }
+  if (itemType === 'custom_tool_call') {
+    return item.input !== undefined ? item.input : (item.arguments || '')
+  }
+  return item.arguments !== undefined ? item.arguments : (item.input || {})
+}
+
+function convertResponseToolCallItem(item) {
+  const callId = String(item.call_id || item.id || `call_${generateUUID().replace(/-/g, '').slice(0, 12)}`)
+  const name = getResponseToolName(item)
+  let args = getResponseToolArguments(item)
+  if (typeof args !== 'string') {
+    args = JSON.stringify(args || {})
+  }
+  return {
+    role: 'assistant',
+    content: null,
+    tool_calls: [{
+      id: callId,
+      type: 'function',
+      function: { name, arguments: args },
+    }]
+  }
+}
+
+function convertResponseToolOutputItem(item) {
+  return {
+    role: 'tool',
+    tool_call_id: String(item.tool_use_id || item.call_id || item.id || ''),
+    content: stringifyResponseContent(item.output !== undefined ? item.output : item.content),
+  }
+}
+
 function normalizeResponseContentPart(part) {
   if (!part || typeof part !== 'object') return null
 
@@ -67,15 +133,25 @@ function normalizeResponseContentPart(part) {
 
   if (part.type === 'input_image' || part.type === 'image' || part.type === 'image_url') {
     const url = part.image_url?.url || part.image_url || part.url || part.image || null
+    if (!url && typeof part.file_id === 'string') {
+      return { kind: 'media', item: { type: 'input_image', file_id: part.file_id, mime_type: part.mime_type || part.media_type || 'image/*' } }
+    }
+    if (!url && typeof part.data === 'string') {
+      return { kind: 'media', item: { type: 'image_url', image_url: { url: `data:${part.mime_type || part.media_type || 'image/*'};base64,${part.data}` } } }
+    }
     if (!url || typeof url !== 'string') return null
     return { kind: 'media', item: { type: 'image_url', image_url: { url } } }
   }
 
   if (part.type === 'input_file') {
     const fileURL = part.file_url || part.url || part.file?.url || null
+    const fileData = part.data_base64 || part.file_data || part.data || null
     const mimeType = typeof part.mime_type === 'string' ? part.mime_type.toLowerCase() : ''
     if (fileURL && typeof fileURL === 'string' && mimeType.startsWith('image/')) {
       return { kind: 'media', item: { type: 'image_url', image_url: { url: fileURL } } }
+    }
+    if (fileData && typeof fileData === 'string' && mimeType.startsWith('image/')) {
+      return { kind: 'media', item: { type: 'image_url', image_url: { url: `data:${mimeType};base64,${fileData}` } } }
     }
 
     const label = part.filename || part.file_id || fileURL || 'attached file'
@@ -95,6 +171,14 @@ function normalizeResponseContentPart(part) {
         }
       }
     }
+  }
+
+  if (part.type === 'custom_tool_call' || part.type === 'local_shell_call' || part.type === 'shell_call') {
+    return { kind: 'tool_call', item: convertResponseToolCallItem(part).tool_calls[0] }
+  }
+
+  if (part.type === 'tool_result' || part.type === 'function_call_output' || part.type === 'custom_tool_call_output' || part.type === 'local_shell_call_output' || part.type === 'shell_call_output') {
+    return { kind: 'tool_result', item: convertResponseToolOutputItem(part) }
   }
 
   return null
@@ -149,13 +233,15 @@ function flattenResponseInput(input) {
       continue
     }
 
-    if (item.type === 'function_call_output') {
+    if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output' || item.type === 'local_shell_call_output' || item.type === 'shell_call_output' || item.type === 'tool_result') {
       flushPendingUserParts()
-      messages.push({
-        role: 'tool',
-        tool_call_id: item.call_id || '',
-        content: typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? ''),
-      })
+      messages.push(convertResponseToolOutputItem(item))
+      continue
+    }
+
+    if (item.type === 'function_call' || item.type === 'custom_tool_call' || item.type === 'local_shell_call' || item.type === 'shell_call') {
+      flushPendingUserParts()
+      messages.push(convertResponseToolCallItem(item))
       continue
     }
 
@@ -169,7 +255,7 @@ function flattenResponseInput(input) {
 
     if (item.type === 'message') {
       flushPendingUserParts()
-      const role = item.role || 'user'
+      const role = item.role === 'developer' ? 'system' : (item.role || 'user')
       if (!Array.isArray(item.content)) {
         messages.push({
           role,
@@ -206,12 +292,21 @@ function flattenResponseInput(input) {
         continue
       }
 
+      const toolResults = normalizedParts
+        .filter((part) => part.kind === 'tool_result')
+        .map((part) => part.item)
+        .filter(Boolean)
+      if (toolResults.length > 0) {
+        messages.push(...toolResults)
+        continue
+      }
+
       const contentItems = normalizedParts.map((part) => part.item).filter(Boolean)
       messages.push({
         role,
         content: contentItems.some((part) => part.type !== 'text')
           ? contentItems
-          : contentItems.map((part) => part.text || '').join(''),
+          : contentItems.map((part) => part.text || '').filter(Boolean).join('\n\n'),
       })
       continue
     }
