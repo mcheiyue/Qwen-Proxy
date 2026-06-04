@@ -2,6 +2,7 @@ const { generateUUID } = require('../utils/tools.js')
 const { isChatType, isThinkingEnabled, parserModel, parserMessages } = require('../utils/chat-helpers.js')
 const accountManager = require('../utils/account.js')
 const { logger } = require('../utils/logger')
+const config = require('../config/index.js')
 const {
   hasTools,
   buildToolPromptBlock,
@@ -75,6 +76,10 @@ const processRequestBody = async (req, res, next) => {
       reasoning_effort,
       size
     } = req.body
+
+    if (!model && req.isCliApi) {
+      model = config.cliCoderModel
+    }
 
     // Process stream parameter
     if (stream === true || stream === 'true') {

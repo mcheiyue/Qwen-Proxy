@@ -37,6 +37,11 @@ const selectChatCompletion = (req, res, next) => {
     }
 }
 
+const markCliApi = (req, res, next) => {
+    req.isCliApi = true
+    next()
+}
+
 router.post('/v1/chat/completions',
     apiKeyVerify,
     processRequestBody,
@@ -46,6 +51,7 @@ router.post('/v1/chat/completions',
 if (config.enableCliApi) {
     router.post('/cli/v1/chat/completions',
         apiKeyVerify,
+        markCliApi,
         processRequestBody,
         selectChatCompletion
     )
