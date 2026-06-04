@@ -2,6 +2,7 @@ const { logger } = require('./logger')
 const { sha256Encrypt, generateUUID } = require('./tools.js')
 const { uploadFileToQwenOss } = require('./upload.js')
 const { getLatestModels } = require('../models/models-map.js')
+const config = require('../config/index.js')
 const accountManager = require('./account.js')
 const CacheManager = require('./img-caches.js')
 
@@ -14,6 +15,10 @@ const MODEL_SUFFIXES = [
     '-video',
     '-image'
 ]
+
+const CLI_MODEL_ALIASES = {
+    'coder-model': () => [config.cliCoderModel, 'qwen3-coder-plus', 'qwen3-coder-flash', config.defaultModel],
+}
 
 const DATA_URI_REGEX = /^data:(.+);base64,(.*)$/i
 const HTTP_URL_REGEX = /^https?:\/\//i
@@ -65,6 +70,27 @@ const findMatchedModel = (models, modelName) => {
             .filter(Boolean)
             .some(alias => String(alias).trim().toLowerCase() === normalizedModelName)
     })
+}
+
+const resolveCliAliasModel = (models, modelName) => {
+    const normalizedModelName = String(modelName || '').trim().toLowerCase()
+    const resolver = CLI_MODEL_ALIASES[normalizedModelName]
+    if (!resolver) {
+        return undefined
+    }
+
+    const candidates = resolver()
+        .map(candidate => String(candidate || '').trim())
+        .filter(Boolean)
+
+    for (const candidate of candidates) {
+        const matchedModel = findMatchedModel(models, candidate)
+        if (matchedModel?.id) {
+            return matchedModel.id
+        }
+    }
+
+    return candidates[0]
 }
 
 /**
@@ -240,17 +266,21 @@ const isThinkingEnabled = (model, enable_thinking, thinking_budget, reasoning_ef
  * @returns {Promise<string>} Parsed model name
  */
 const parserModel = async (model) => {
-    if (!model) return 'qwen3.6-plus'
+    if (!model) return config.defaultModel
 
     try {
         const { baseModel } = splitModelSuffix(model)
         const latestModels = await getLatestModels()
+        const cliAliasModel = resolveCliAliasModel(latestModels, baseModel)
+        if (cliAliasModel) {
+            return cliAliasModel
+        }
         const matchedModel = findMatchedModel(latestModels, baseModel)
 
         return matchedModel?.id || baseModel
     } catch (e) {
         const { baseModel } = splitModelSuffix(model)
-        return baseModel || 'qwen3.6-plus'
+        return baseModel || config.defaultModel
     }
 }
 

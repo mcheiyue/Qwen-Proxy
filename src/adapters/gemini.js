@@ -6,6 +6,8 @@
 /**
  * Convert Gemini generateContent request to OpenAI chat completions format
  */
+const config = require('../config/index.js')
+
 function geminiToOpenAI(geminiBody, urlModel) {
   const messages = []
 
@@ -121,7 +123,7 @@ function geminiToOpenAI(geminiBody, urlModel) {
   }
 
   // Search toggle
-  let model = urlModel || 'qwen3.6-plus'
+  let model = urlModel || config.defaultModel
   const hasSearch = (geminiBody.tools || []).some(t =>
     t.google_search || t.googleSearch || t.google_search_retrieval || t.googleSearchRetrieval
     || (t.type === 'function' && t.function && t.function.name === 'googleSearch')
