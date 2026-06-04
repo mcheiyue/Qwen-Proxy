@@ -98,6 +98,21 @@ $env:SMOKE_MODEL = "qwen3.6-plus"
 npm run smoke:gray -- --full
 ```
 
+流式灰度 smoke 会额外触发一次流式 chat 和一次流式 `/v1/responses` 请求，用于确认 SSE 基础协议和 `[DONE]` 收尾：
+
+```powershell
+$env:SMOKE_BASE_URL = "http://127.0.0.1:17860"
+$env:SMOKE_API_KEY = "你的对外 API Key"
+$env:SMOKE_MODEL = "qwen3.6-plus"
+npm run smoke:gray -- --stream
+```
+
+如需同时覆盖非流式和流式端点：
+
+```powershell
+npm run smoke:gray -- --full --stream
+```
+
 ## 灰度验证建议
 
 至少验证以下内容：
