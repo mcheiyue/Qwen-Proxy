@@ -1,0 +1,43 @@
+services:
+  qwen-proxy:
+    image: ${QWEN_PROXY_IMAGE:-mcheiyue/qwen-proxy-heiyue:latest}
+    container_name: ${QWEN_PROXY_CONTAINER_NAME:-qwen-proxy-test}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${QWEN_PROXY_HOST_PORT:-17860}:3000"
+    environment:
+      SERVICE_PORT: 3000
+      API_KEY: ${API_KEY:-}
+      ACCOUNTS: ${ACCOUNTS:-}
+      DATA_SAVE_MODE: ${DATA_SAVE_MODE:-file}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROXIES: ${PROXIES:-}
+      PROXY_URL: ${PROXY_URL:-}
+      PROXY_MAX_RETRIES: ${PROXY_MAX_RETRIES:-3}
+      QWEN_CHAT_PROXY_URL: ${QWEN_CHAT_PROXY_URL:-https://chat.qwen.ai}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-qwen3.6-plus}
+      ENABLE_RESPONSES_API: ${ENABLE_RESPONSES_API:-true}
+      ENABLE_CLI_API: ${ENABLE_CLI_API:-true}
+      RESPONSES_STORE_BACKEND: ${RESPONSES_STORE_BACKEND:-file}
+      RESPONSES_STORE_FILE: ${RESPONSES_STORE_FILE:-./data/responses-store.json}
+      RESPONSES_STORE_REDIS_KEY: ${RESPONSES_STORE_REDIS_KEY:-qwen2api:responses}
+      RESPONSES_STORE_TTL_SECONDS: ${RESPONSES_STORE_TTL_SECONDS:-1800}
+      TOOL_RESULT_MAX_CHARS: ${TOOL_RESULT_MAX_CHARS:-12000}
+      TOOL_RESULT_TAIL_CHARS: ${TOOL_RESULT_TAIL_CHARS:-2000}
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    mem_limit: ${QWEN_PROXY_MEM_LIMIT:-512m}
+    pids_limit: ${QWEN_PROXY_PIDS_LIMIT:-512}
+    networks:
+      - cpa_default
+
+networks:
+  cpa_default:
+    external: true
