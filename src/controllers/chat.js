@@ -22,6 +22,19 @@ const buildRequestErrorBody = (req, message, code) => ({
     request_id: req?.requestId || null
 })
 
+const requiresToolCall = (toolChoice) => {
+    if (toolChoice === 'required') return true
+    if (!toolChoice || typeof toolChoice !== 'object') return false
+    return toolChoice.type === 'function' && !!toolChoice.function?.name
+}
+
+const buildRequiredRetryHint = (toolChoice) => {
+    if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function' && toolChoice.function?.name) {
+        return `The previous response did not include the required tool call. You must now call the function named ${toolChoice.function.name}. Return only the tool call in the required DSML format.`
+    }
+    return 'The previous response did not include a required tool call. You must now call exactly one available tool. Return only the tool call in the required DSML format.'
+}
+
 /**
  * Set response headers
  * @param {object} res - Express response object
@@ -294,141 +307,173 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
  */
 const handleNonStreamResponse = async (req, res, response, enable_thinking, enable_web_search, model, requestBody = null, toolcallEnabled = false) => {
     try {
-        const decoder = new TextDecoder('utf-8')
-        let buffer = ''
-        let fullContent = ''
-        let reasoningContent = ''
-        let web_search_info = null
-        let currentPhase = null
-        let appendedImageMarkdownSet = new Set()
-        let pendingImageMarkdownList = []
+        const consumeUpstreamResponse = async (upstreamResponse) => {
+            const decoder = new TextDecoder('utf-8')
+            let buffer = ''
+            let fullContent = ''
+            let reasoningContent = ''
+            let web_search_info = null
+            let currentPhase = null
+            let appendedImageMarkdownSet = new Set()
+            let pendingImageMarkdownList = []
 
-        let totalTokens = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+            let totalTokens = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
-        await new Promise((resolve, reject) => {
-            response.on('data', async (chunk) => {
-                const decodeText = decoder.decode(chunk, { stream: true })
-                buffer += decodeText
+            await new Promise((resolve, reject) => {
+                upstreamResponse.on('data', async (chunk) => {
+                    const decodeText = decoder.decode(chunk, { stream: true })
+                    buffer += decodeText
 
-                const chunks = []
-                let startIndex = 0
+                    const chunks = []
+                    let startIndex = 0
 
-                while (true) {
-                    const dataStart = buffer.indexOf('data: ', startIndex)
-                    if (dataStart === -1) break
-                    const dataEnd = buffer.indexOf('\n\n', dataStart)
-                    if (dataEnd === -1) break
-                    chunks.push(buffer.substring(dataStart, dataEnd).trim())
-                    startIndex = dataEnd + 2
-                }
-
-                if (startIndex > 0) buffer = buffer.substring(startIndex)
-
-                for (const item of chunks) {
-                    try {
-                        let dataContent = item.replace("data: ", '')
-                        let decodeJson = isJson(dataContent) ? JSON.parse(dataContent) : null
-                        if (!decodeJson || !decodeJson.choices || decodeJson.choices.length === 0) continue
-
-                        if (decodeJson.usage) {
-                            totalTokens = {
-                                prompt_tokens: decodeJson.usage.prompt_tokens || totalTokens.prompt_tokens,
-                                completion_tokens: decodeJson.usage.completion_tokens || totalTokens.completion_tokens,
-                                total_tokens: decodeJson.usage.total_tokens || totalTokens.total_tokens
-                            }
-                        }
-
-                        const delta = decodeJson.choices[0].delta
-
-                        if (delta && delta.name === 'web_search') {
-                            web_search_info = delta.extra.web_search_info
-                        }
-
-                        const imageMarkdownList = getImageMarkdownListFromDelta(delta)
-                        if (imageMarkdownList.length > 0) {
-                            const newList = imageMarkdownList.filter(item => !appendedImageMarkdownSet.has(item))
-                            if (currentPhase === 'think') {
-                                for (const md of newList) {
-                                    if (!pendingImageMarkdownList.includes(md)) pendingImageMarkdownList.push(md)
-                                }
-                            } else if (newList.length > 0) {
-                                fullContent += `${newList.join('\n\n')}\n\n`
-                                newList.forEach(item => appendedImageMarkdownSet.add(item))
-                            }
-                        }
-
-                        if (!delta || !delta.content || (delta.phase !== 'think' && delta.phase !== 'answer')) continue
-
-                        let content = delta.content
-
-                        if (delta.phase === 'think') {
-                            if (currentPhase !== 'think' && web_search_info) {
-                                const searchTable = await accountManager.generateMarkdownTable(web_search_info, config.searchInfoMode)
-                                reasoningContent += searchTable + '\n\n'
-                            }
-                            currentPhase = 'think'
-                            reasoningContent += content
-                        } else if (delta.phase === 'answer') {
-                            if (currentPhase === 'think' && pendingImageMarkdownList.length > 0) {
-                                fullContent += `${pendingImageMarkdownList.join('\n\n')}\n\n`
-                                pendingImageMarkdownList.forEach(item => appendedImageMarkdownSet.add(item))
-                                pendingImageMarkdownList = []
-                            }
-                            currentPhase = 'answer'
-                            fullContent += content
-                        }
-                    } catch (error) {
-                        logger.error('Non-stream data processing error', 'CHAT', '', buildRequestLogMeta(req, {
-                            error: error && error.message ? error.message : error
-                        }))
+                    while (true) {
+                        const dataStart = buffer.indexOf('data: ', startIndex)
+                        if (dataStart === -1) break
+                        const dataEnd = buffer.indexOf('\n\n', dataStart)
+                        if (dataEnd === -1) break
+                        chunks.push(buffer.substring(dataStart, dataEnd).trim())
+                        startIndex = dataEnd + 2
                     }
-                }
+
+                    if (startIndex > 0) buffer = buffer.substring(startIndex)
+
+                    for (const item of chunks) {
+                        try {
+                            let dataContent = item.replace("data: ", '')
+                            let decodeJson = isJson(dataContent) ? JSON.parse(dataContent) : null
+                            if (!decodeJson || !decodeJson.choices || decodeJson.choices.length === 0) continue
+
+                            if (decodeJson.usage) {
+                                totalTokens = {
+                                    prompt_tokens: decodeJson.usage.prompt_tokens || totalTokens.prompt_tokens,
+                                    completion_tokens: decodeJson.usage.completion_tokens || totalTokens.completion_tokens,
+                                    total_tokens: decodeJson.usage.total_tokens || totalTokens.total_tokens
+                                }
+                            }
+
+                            const delta = decodeJson.choices[0].delta
+
+                            if (delta && delta.name === 'web_search') {
+                                web_search_info = delta.extra.web_search_info
+                            }
+
+                            const imageMarkdownList = getImageMarkdownListFromDelta(delta)
+                            if (imageMarkdownList.length > 0) {
+                                const newList = imageMarkdownList.filter(item => !appendedImageMarkdownSet.has(item))
+                                if (currentPhase === 'think') {
+                                    for (const md of newList) {
+                                        if (!pendingImageMarkdownList.includes(md)) pendingImageMarkdownList.push(md)
+                                    }
+                                } else if (newList.length > 0) {
+                                    fullContent += `${newList.join('\n\n')}\n\n`
+                                    newList.forEach(item => appendedImageMarkdownSet.add(item))
+                                }
+                            }
+
+                            if (!delta || !delta.content || (delta.phase !== 'think' && delta.phase !== 'answer')) continue
+
+                            let content = delta.content
+
+                            if (delta.phase === 'think') {
+                                if (currentPhase !== 'think' && web_search_info) {
+                                    const searchTable = await accountManager.generateMarkdownTable(web_search_info, config.searchInfoMode)
+                                    reasoningContent += searchTable + '\n\n'
+                                }
+                                currentPhase = 'think'
+                                reasoningContent += content
+                            } else if (delta.phase === 'answer') {
+                                if (currentPhase === 'think' && pendingImageMarkdownList.length > 0) {
+                                    fullContent += `${pendingImageMarkdownList.join('\n\n')}\n\n`
+                                    pendingImageMarkdownList.forEach(item => appendedImageMarkdownSet.add(item))
+                                    pendingImageMarkdownList = []
+                                }
+                                currentPhase = 'answer'
+                                fullContent += content
+                            }
+                        } catch (error) {
+                            logger.error('Non-stream data processing error', 'CHAT', '', buildRequestLogMeta(req, {
+                                error: error && error.message ? error.message : error
+                            }))
+                        }
+                    }
+                })
+
+                upstreamResponse.on('end', () => resolve())
+                upstreamResponse.on('error', (error) => reject(error))
             })
 
-            response.on('end', () => resolve())
-            response.on('error', (error) => reject(error))
-        })
+            if ((config.outThink === false || !enable_thinking) && web_search_info && config.searchInfoMode === "text") {
+                const webSearchTable = await accountManager.generateMarkdownTable(web_search_info, "text")
+                fullContent += `\n\n---\n${webSearchTable}`
+            }
 
-        if ((config.outThink === false || !enable_thinking) && web_search_info && config.searchInfoMode === "text") {
-            const webSearchTable = await accountManager.generateMarkdownTable(web_search_info, "text")
-            fullContent += `\n\n---\n${webSearchTable}`
+            if (totalTokens.prompt_tokens === 0 && totalTokens.completion_tokens === 0) {
+                totalTokens = createUsageObject(requestBody?.messages || '', fullContent + reasoningContent, null)
+            }
+
+            totalTokens.prompt_tokens = Math.max(0, totalTokens.prompt_tokens || 0)
+            totalTokens.completion_tokens = Math.max(0, totalTokens.completion_tokens || 0)
+            totalTokens.total_tokens = totalTokens.prompt_tokens + totalTokens.completion_tokens
+
+            const message = { "role": "assistant", "content": fullContent }
+            if (reasoningContent) {
+                message.reasoning_content = reasoningContent
+            }
+
+            let finishReason = "stop"
+            if (toolcallEnabled && fullContent) {
+                const parsed = parseToolCallsFromText(fullContent)
+                if (parsed.toolCalls.length > 0) {
+                    message.content = parsed.content
+                    message.tool_calls = parsed.toolCalls
+                    finishReason = "tool_calls"
+                }
+            }
+
+            return {
+                "id": `chatcmpl-${generateUUID()}`,
+                "object": "chat.completion",
+                "created": Math.round(new Date().getTime() / 1000),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finishReason
+                }],
+                "usage": totalTokens,
+                "finish_reason": finishReason,
+                "tool_calls": Array.isArray(message.tool_calls) ? message.tool_calls : []
+            }
         }
 
-        if (totalTokens.prompt_tokens === 0 && totalTokens.completion_tokens === 0) {
-            totalTokens = createUsageObject(requestBody?.messages || '', fullContent + reasoningContent, null)
-        }
+        let responseData = await consumeUpstreamResponse(response)
 
-        totalTokens.prompt_tokens = Math.max(0, totalTokens.prompt_tokens || 0)
-        totalTokens.completion_tokens = Math.max(0, totalTokens.completion_tokens || 0)
-        totalTokens.total_tokens = totalTokens.prompt_tokens + totalTokens.completion_tokens
+        if (toolcallEnabled && requiresToolCall(req.tool_choice) && (!responseData.tool_calls || responseData.tool_calls.length === 0)) {
+            const retryMessages = Array.isArray(requestBody?.messages) ? [...requestBody.messages] : []
+            retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice) })
+            logger.warn('Required tool call missing, retrying non-stream chat once', 'CHAT', '', buildRequestLogMeta(req, {
+                model: model || null,
+                tool_choice: req.tool_choice || null
+            }))
 
-        const message = { "role": "assistant", "content": fullContent }
-        if (reasoningContent) {
-            message.reasoning_content = reasoningContent
-        }
+            const retryResponseData = await sendChatRequest({
+                ...req.body,
+                messages: retryMessages
+            })
 
-        // Tool-call extraction. Only when the gate said the request has tools.
-        let finishReason = "stop"
-        if (toolcallEnabled && fullContent) {
-            const parsed = parseToolCallsFromText(fullContent)
-            if (parsed.toolCalls.length > 0) {
-                message.content = parsed.content
-                message.tool_calls = parsed.toolCalls
-                finishReason = "tool_calls"
+            if (retryResponseData?.status && retryResponseData.response) {
+                responseData = await consumeUpstreamResponse(retryResponseData.response)
             }
         }
 
         res.json({
-            "id": `chatcmpl-${generateUUID()}`,
-            "object": "chat.completion",
-            "created": Math.round(new Date().getTime() / 1000),
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "message": message,
-                "finish_reason": finishReason
-            }],
-            "usage": totalTokens
+            "id": responseData.id,
+            "object": responseData.object,
+            "created": responseData.created,
+            "model": responseData.model,
+            "choices": responseData.choices,
+            "usage": responseData.usage
         })
     } catch (error) {
         logger.error('Non-stream chat processing error', 'CHAT', '', buildRequestLogMeta(req, {

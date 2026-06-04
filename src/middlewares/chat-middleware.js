@@ -93,6 +93,8 @@ const processRequestBody = async (req, res, next) => {
     // Tool-call gate: only activate when the client actually sent `tools`.
     // When inactive, behavior is byte-identical to before this feature existed.
     req.toolcall_enabled = false
+    req.tool_choice = req.body.tool_choice || 'auto'
+    req.parallel_tool_calls = req.body.parallel_tool_calls
     if (hasTools(req.body)) {
       req.toolcall_enabled = true
       req.toolcall_tools = req.body.tools
