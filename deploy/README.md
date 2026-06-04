@@ -52,6 +52,14 @@ PROXY_URL=socks5://QWEN2API.QWEN_01:TOKEN@resin:2260
 
 但生产目标仍应优先使用 `PROXIES` 代理池模式。
 
+如果某个账号需要固定优先使用私有代理，可在 `ACCOUNTS` 中写成：
+
+```env
+ACCOUNTS=email1:password1|socks5://QWEN2API.QWEN_01:TOKEN@resin:2260,email2:password2
+```
+
+该格式只是给账号绑定一个优先代理候选，不会替代 `PROXIES` 代理池；当请求出现网络级代理错误时，仍会复用现有失败标记与换绑逻辑。
+
 ## 启动命令
 
 在仓库根目录执行：
