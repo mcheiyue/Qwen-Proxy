@@ -1,22 +1,27 @@
-# Stage 1: Install dependencies
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json ./
-RUN npm install --production
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
-# Stage 2: Production image
+FROM node:20-alpine AS webui-build
+WORKDIR /app
+COPY package.json ./package.json
+COPY webui/package.json webui/package-lock.json ./webui/
+WORKDIR /app/webui
+RUN npm ci
+COPY webui ./
+RUN npm run build
+
 FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Copy dependencies
 COPY --from=deps /app/node_modules ./node_modules
 
-# Copy source code
 COPY . .
+COPY --from=webui-build /app/webui/dist ./webui/dist
 
-# Create data directory for file mode
 RUN mkdir -p /app/data /app/logs
 
 EXPOSE 3000
