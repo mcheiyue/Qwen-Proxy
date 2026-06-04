@@ -106,6 +106,41 @@ function assertModelList(result, label) {
   }
 }
 
+function assertHealthObservability(result) {
+  assertObject(result, 'health observability')
+  const body = result.body
+  if (!body.features || typeof body.features !== 'object' || Array.isArray(body.features)) {
+    throw new Error('health observability: expected features object')
+  }
+  if (typeof body.features.responses_api !== 'boolean' || typeof body.features.cli_api !== 'boolean') {
+    throw new Error('health observability: expected boolean features.responses_api and features.cli_api')
+  }
+  if (!body.responses || typeof body.responses !== 'object' || Array.isArray(body.responses)) {
+    throw new Error('health observability: expected responses object')
+  }
+  if (typeof body.responses.enabled !== 'boolean') {
+    throw new Error('health observability: expected boolean responses.enabled')
+  }
+  if (!body.responses.store || typeof body.responses.store !== 'object' || Array.isArray(body.responses.store)) {
+    throw new Error('health observability: expected responses.store object')
+  }
+  if (typeof body.responses.store.backend !== 'string' || !body.responses.store.backend) {
+    throw new Error('health observability: expected responses.store.backend string')
+  }
+  if (typeof body.responses.store.ttl_seconds !== 'number') {
+    throw new Error('health observability: expected responses.store.ttl_seconds number')
+  }
+  if (!body.persistence || typeof body.persistence !== 'object' || Array.isArray(body.persistence)) {
+    throw new Error('health observability: expected persistence object')
+  }
+  if (typeof body.persistence.data_save_mode !== 'string' || !body.persistence.data_save_mode) {
+    throw new Error('health observability: expected persistence.data_save_mode string')
+  }
+  if (!body.proxy_pool || typeof body.proxy_pool !== 'object' || Array.isArray(body.proxy_pool)) {
+    throw new Error('health observability: expected proxy_pool object')
+  }
+}
+
 function smokeTools() {
   return [{
     type: 'function',
@@ -141,7 +176,9 @@ async function run() {
   if (health.body.status !== 'ok') {
     throw new Error(`health: expected status=ok, got ${JSON.stringify(health.body.status)}`)
   }
+  assertHealthObservability(health)
   results.push(health)
+  results.push({ label: 'health observability', status: health.status, ms: health.ms, body: health.body })
 
   if (apiKey) {
     const models = await requestJSON('models', '/v1/models', {

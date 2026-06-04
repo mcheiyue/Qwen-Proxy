@@ -89,6 +89,8 @@ $env:SMOKE_API_KEY = "你的对外 API Key"
 npm run smoke:gray
 ```
 
+快速 smoke 会检查 `/health` 的基础运行摘要，包括 `features.responses_api`、`features.cli_api`、`responses.store.backend`、`responses.store.ttl_seconds`、`persistence.data_save_mode` 与 `proxy_pool`。这些字段用于确认灰度容器的接口开关、Responses store 和代理池观测面是否正常暴露。
+
 完整灰度 smoke 会额外触发一次非流式 chat 和一次 `/v1/responses` 请求，确认账号与代理都准备好后再执行：
 
 ```powershell
