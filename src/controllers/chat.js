@@ -302,6 +302,84 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
     }
 }
 
+const writeBufferedChatCompletionAsStream = (res, responseData) => {
+    const choice = responseData?.choices?.[0] || {}
+    const message = choice.message || {}
+    const finishReason = choice.finish_reason || responseData?.finish_reason || 'stop'
+    const base = {
+        id: responseData?.id || `chatcmpl-${generateUUID()}`,
+        object: 'chat.completion.chunk',
+        created: responseData?.created || Math.round(Date.now() / 1000),
+        model: responseData?.model,
+    }
+    const writeChunk = (delta, finish_reason = null) => {
+        res.write(`data: ${JSON.stringify({
+            ...base,
+            choices: [{ index: 0, delta, finish_reason }]
+        })}\n\n`)
+    }
+
+    writeChunk({ role: 'assistant' })
+    if (message.reasoning_content) {
+        writeChunk({ reasoning_content: message.reasoning_content })
+    }
+    if (message.content) {
+        writeChunk({ content: message.content })
+    }
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+        writeChunk({
+            tool_calls: message.tool_calls.map((toolCall, index) => ({
+                index,
+                id: toolCall.id,
+                type: toolCall.type || 'function',
+                function: toolCall.function || { name: '', arguments: '{}' }
+            }))
+        })
+    }
+    writeChunk({}, finishReason)
+    if (responseData?.usage) {
+        res.write(`data: ${JSON.stringify({
+            ...base,
+            choices: [],
+            usage: responseData.usage
+        })}\n\n`)
+    }
+    res.write('data: [DONE]\n\n')
+    res.end()
+}
+
+const handleBufferedRequiredStreamResponse = async (req, res, response, enable_thinking, enable_web_search, model, requestBody = null, toolcallEnabled = false) => {
+    let payload = null
+    let statusCode = 200
+    const captureRes = {
+        set: () => captureRes,
+        status: (code) => {
+            statusCode = code
+            return captureRes
+        },
+        json: (body) => {
+            payload = body
+            return captureRes
+        }
+    }
+
+    await handleNonStreamResponse(req, captureRes, response, enable_thinking, enable_web_search, model, requestBody, toolcallEnabled)
+    if (statusCode >= 400 || !payload) {
+        const errorMessage = payload?.error || 'Required tool call stream buffering failed'
+        logger.error('Buffered required stream failed', 'CHAT', '', buildRequestLogMeta(req, { error: errorMessage, status_code: statusCode }))
+        res.write(`data: ${JSON.stringify({
+            id: `chatcmpl-${generateUUID()}`,
+            object: 'chat.completion.chunk',
+            created: Math.round(Date.now() / 1000),
+            choices: [{ index: 0, delta: { content: '' }, finish_reason: 'stop' }]
+        })}\n\n`)
+        res.write('data: [DONE]\n\n')
+        res.end()
+        return
+    }
+    writeBufferedChatCompletionAsStream(res, payload)
+}
+
 /**
  * Handle non-streaming response (accumulate from stream)
  */
@@ -504,6 +582,14 @@ const handleChatCompletion = async (req, res) => {
 
         if (stream) {
             setResponseHeaders(res, true)
+            if (req.toolcall_enabled && requiresToolCall(req.tool_choice)) {
+                logger.warn('Buffering stream to satisfy required tool choice', 'CHAT', '', buildRequestLogMeta(req, {
+                    model: model || null,
+                    tool_choice: req.tool_choice || null
+                }))
+                await handleBufferedRequiredStreamResponse(req, res, response_data.response, enable_thinking, enable_web_search, model, req.body, req.toolcall_enabled)
+                return
+            }
             await handleStreamResponse(req, res, response_data.response, enable_thinking, enable_web_search, req.body, req.toolcall_enabled)
         } else {
             setResponseHeaders(res, false)
