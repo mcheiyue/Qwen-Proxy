@@ -144,9 +144,11 @@ function compressToolDefinition(tool) {
     : `- ${name}(input: ${signature})`
 }
 
-function buildToolPromptBlock(tools) {
+function buildToolPromptBlock(tools, options = {}) {
   const toolList = tools || []
   const decls = toolList.map(compressToolDefinition).join('\n')
+  const choice = options.tool_choice
+  const parallelToolCalls = options.parallel_tool_calls
 
   // Enumerate every tool name once at the top AND once at the bottom.
   // Larger Qwen variants (notably qwen3.6-plus) sometimes refuse with
@@ -159,7 +161,7 @@ function buildToolPromptBlock(tools) {
     .filter(Boolean)
   const namesLine = namesList.length > 0 ? namesList.join(', ') : '(none)'
 
-  return [
+  const lines = [
     `AVAILABLE TOOLS (whitelist, all are real and callable): ${namesLine}`,
     '',
     'You may call any of the tools above. When you decide to call a tool, output the call EXACTLY in this format and stop:',
@@ -179,10 +181,23 @@ function buildToolPromptBlock(tools) {
     '6. If you call a tool, the block must be the last thing you output.',
     `7. EVERY tool listed above (${namesLine}) IS REAL and IS available right now. Do NOT respond with "tool X does not exist" — that response is incorrect. If a user asks you to call a tool by name and that name is in the whitelist, call it. If you are uncertain about the parameters, fill in the best-guess values matching the schema rather than refusing.`,
     '8. Tool names are case-sensitive. Use the exact spelling from the whitelist above.',
-    '',
-    'Tools available (compact signatures):',
-    decls,
-  ].join('\n')
+  ]
+
+  if (choice === 'required') {
+    lines.push('9. tool_choice is required: you MUST call at least one tool before answering.')
+  } else if (choice === 'none') {
+    lines.push('9. tool_choice is none: do NOT call any tool for this turn; answer in plain text.')
+  } else if (choice && typeof choice === 'object' && choice.function && choice.function.name) {
+    const selectedName = obfuscateToolName(String(choice.function.name))
+    lines.push(`9. tool_choice selects ${selectedName}: call this tool first if a tool call is needed for this turn.`)
+  }
+
+  if (parallelToolCalls === false) {
+    lines.push('10. parallel_tool_calls is false: emit at most one <|DSML|invoke> in this turn.')
+  }
+
+  lines.push('', 'Tools available (compact signatures):', decls)
+  return lines.join('\n')
 }
 
 /* ---------------- history serialization ---------------- */

@@ -18,7 +18,7 @@ const {
  * - role:'tool'         → role:'user' with a <|DSML|tool_result> block
  * - prepended system message holds the tool schemas + format instructions
  */
-function injectToolCallContext(messages, tools) {
+function injectToolCallContext(messages, tools, options = {}) {
   const rewritten = (messages || []).map((m) => {
     if (!m || typeof m !== 'object') return m
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
@@ -34,7 +34,7 @@ function injectToolCallContext(messages, tools) {
     }
     return m
   })
-  const promptBlock = buildToolPromptBlock(tools)
+  const promptBlock = buildToolPromptBlock(tools, options)
   return [{ role: 'system', content: promptBlock }, ...rewritten]
 }
 
@@ -96,7 +96,10 @@ const processRequestBody = async (req, res, next) => {
     if (hasTools(req.body)) {
       req.toolcall_enabled = true
       req.toolcall_tools = req.body.tools
-      messages = injectToolCallContext(messages, req.body.tools)
+      messages = injectToolCallContext(messages, req.body.tools, {
+        tool_choice: req.body.tool_choice,
+        parallel_tool_calls: req.body.parallel_tool_calls,
+      })
     }
 
     // Process messages
