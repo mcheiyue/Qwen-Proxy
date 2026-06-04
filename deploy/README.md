@@ -113,6 +113,21 @@ npm run smoke:gray -- --stream
 npm run smoke:gray -- --full --stream
 ```
 
+工具调用灰度 smoke 会额外触发一次非流式 chat 工具调用和一次非流式 `/v1/responses` 工具调用，用于确认 `tools`、`tool_choice=required` 和 `tool_calls/function_call` 输出结构：
+
+```powershell
+$env:SMOKE_BASE_URL = "http://127.0.0.1:17860"
+$env:SMOKE_API_KEY = "你的对外 API Key"
+$env:SMOKE_MODEL = "qwen3.6-plus"
+npm run smoke:gray -- --tools
+```
+
+如需完整覆盖基础端点、非流式、流式和工具调用：
+
+```powershell
+npm run smoke:gray -- --full --stream --tools
+```
+
 ## 灰度验证建议
 
 至少验证以下内容：

@@ -5,6 +5,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:17860'
 const args = new Set(process.argv.slice(2))
 const fullMode = args.has('--full')
 const streamMode = args.has('--stream')
+const toolsMode = args.has('--tools')
 const helpMode = args.has('--help') || args.has('-h')
 
 const baseUrl = (process.env.SMOKE_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '')
@@ -13,7 +14,7 @@ const model = process.env.SMOKE_MODEL || process.env.DEFAULT_MODEL || 'qwen3.6-p
 const timeoutMs = Number.parseInt(process.env.SMOKE_TIMEOUT_MS || '30000', 10)
 
 function printHelp() {
-  console.log(`Usage: npm run smoke:gray -- [--full] [--stream]\n\nEnvironment:\n  SMOKE_BASE_URL       Base URL to test. Default: ${DEFAULT_BASE_URL}\n  SMOKE_API_KEY        API key for protected endpoints. Falls back to API_KEY.\n  SMOKE_MODEL          Model for full chat/responses tests. Default: qwen3.6-plus\n  SMOKE_TIMEOUT_MS     Per-request timeout. Default: 30000\n\nModes:\n  default              Test /health, /v1/models, GET+POST /cli/v1/models.\n  --full               Also test non-stream /v1/chat/completions and /v1/responses.\n  --stream             Also test streaming chat/responses SSE endpoints.\n`)
+  console.log(`Usage: npm run smoke:gray -- [--full] [--stream] [--tools]\n\nEnvironment:\n  SMOKE_BASE_URL       Base URL to test. Default: ${DEFAULT_BASE_URL}\n  SMOKE_API_KEY        API key for protected endpoints. Falls back to API_KEY.\n  SMOKE_MODEL          Model for full chat/responses tests. Default: qwen3.6-plus\n  SMOKE_TIMEOUT_MS     Per-request timeout. Default: 30000\n\nModes:\n  default              Test /health, /v1/models, GET+POST /cli/v1/models.\n  --full               Also test non-stream /v1/chat/completions and /v1/responses.\n  --stream             Also test streaming chat/responses SSE endpoints.\n  --tools              Also test non-stream tool calling via chat/responses.\n`)
 }
 
 function authHeaders(extra = {}) {
@@ -105,6 +106,23 @@ function assertModelList(result, label) {
   }
 }
 
+function smokeTools() {
+  return [{
+    type: 'function',
+    function: {
+      name: 'get_smoke_status',
+      description: 'Return the current gray smoke status.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'The smoke target to inspect.' }
+        },
+        required: ['target']
+      }
+    }
+  }]
+}
+
 async function run() {
   if (helpMode) {
     printHelp()
@@ -112,7 +130,7 @@ async function run() {
   }
 
   console.log(`Gray smoke target: ${baseUrl}`)
-  console.log(`Mode: ${fullMode ? 'full' : 'quick'}${streamMode ? '+stream' : ''}`)
+  console.log(`Mode: ${fullMode ? 'full' : 'quick'}${streamMode ? '+stream' : ''}${toolsMode ? '+tools' : ''}`)
   if (!apiKey) {
     console.log('No SMOKE_API_KEY/API_KEY provided; protected endpoint checks will be skipped.')
   }
@@ -218,6 +236,48 @@ async function run() {
         throw new Error(`responses stream: expected response.created and response.completed, got ${Array.from(responseEvents).join(',')}`)
       }
       results.push(responsesStream)
+    }
+
+    if (toolsMode) {
+      const tools = smokeTools()
+      const chatTools = await requestJSON('chat completions tools', '/v1/chat/completions', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          model,
+          stream: false,
+          messages: [{ role: 'user', content: 'Call get_smoke_status with target set to gray-smoke.' }],
+          tools,
+          tool_choice: 'required',
+          parallel_tool_calls: false,
+        }),
+      })
+      assertObject(chatTools, 'chat completions tools')
+      const chatToolCalls = chatTools.body?.choices?.[0]?.message?.tool_calls
+      if (!Array.isArray(chatToolCalls) || chatToolCalls.length === 0) {
+        throw new Error('chat completions tools: expected at least one tool call')
+      }
+      results.push(chatTools)
+
+      const responseTools = await requestJSON('responses tools', '/v1/responses', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          model,
+          input: 'Call get_smoke_status with target set to gray-smoke.',
+          stream: false,
+          tools,
+          tool_choice: 'required',
+          parallel_tool_calls: false,
+          metadata: { smoke: 'gray-tools' },
+        }),
+      })
+      assertObject(responseTools, 'responses tools')
+      const hasFunctionCall = Array.isArray(responseTools.body.output) && responseTools.body.output.some(item => item && item.type === 'function_call')
+      if (responseTools.body.object !== 'response' || !hasFunctionCall) {
+        throw new Error(`responses tools: expected response output with function_call, got ${JSON.stringify(responseTools.body)}`)
+      }
+      results.push(responseTools)
     }
   }
 
