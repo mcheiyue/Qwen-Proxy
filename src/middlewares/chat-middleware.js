@@ -95,7 +95,7 @@ const processRequestBody = async (req, res, next) => {
     req.toolcall_enabled = false
     req.tool_choice = req.body.tool_choice || 'auto'
     req.parallel_tool_calls = req.body.parallel_tool_calls
-    if (hasTools(req.body)) {
+    if (hasTools(req.body) && req.tool_choice !== 'none') {
       req.toolcall_enabled = true
       req.toolcall_tools = req.body.tools
       messages = injectToolCallContext(messages, req.body.tools, {
