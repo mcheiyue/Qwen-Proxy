@@ -37,6 +37,8 @@ RESPONSES_STORE_BACKEND=file
 RESPONSES_STORE_FILE=./data/responses-store.json
 RESPONSES_STORE_REDIS_KEY=qwen2api:responses
 RESPONSES_STORE_TTL_SECONDS=1800
+RESPONSES_DEBUG_DUMP=false
+RESPONSES_DEBUG_DUMP_DIR=./logs/responses-debug
 TOOL_RESULT_MAX_CHARS=12000
 TOOL_RESULT_TAIL_CHARS=2000
 QWEN_PROXY_HOST_PORT=17860
@@ -158,6 +160,13 @@ npm run smoke:gray -- --full --stream --tools
 - `RESPONSES_STORE_BACKEND`（当前支持 `memory` / `file` / `redis`）
 - `RESPONSES_STORE_FILE`
 - `RESPONSES_STORE_REDIS_KEY`
+
+如果需要定位 OpenCode / Responses 复杂 input 的串台或工具回灌问题，可临时开启：
+
+- `RESPONSES_DEBUG_DUMP=true`
+- `RESPONSES_DEBUG_DUMP_DIR=./logs/responses-debug`
+
+开启后会按 `request_id` 落两份调试文件：raw 请求体和 normalized 结果。只建议短时排障使用，排查完成后关闭，避免长期落敏感上下文。
 
 默认策略是保留前半段主体，再保留尾部结论，中间插入截断标记。
 

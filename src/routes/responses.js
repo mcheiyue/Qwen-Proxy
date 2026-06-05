@@ -249,6 +249,43 @@ function buildUserMessageFromParts(parts) {
   }
 }
 
+const TOP_LEVEL_TOOL_REPLAY_TYPES = new Set([
+  'function_call',
+  'custom_tool_call',
+  'local_shell_call',
+  'shell_call',
+  'function_call_output',
+  'custom_tool_call_output',
+  'local_shell_call_output',
+  'shell_call_output',
+  'tool_result',
+])
+
+function isTopLevelToolReplayItem(item) {
+  return !!(item && typeof item === 'object' && TOP_LEVEL_TOOL_REPLAY_TYPES.has(String(item.type || '')))
+}
+
+function collectRecentTopLevelReplayIndexes(input) {
+  if (!Array.isArray(input) || input.length === 0) return new Set()
+  let end = input.length - 1
+  const trailing = input[end]
+  if (trailing && typeof trailing === 'object' && trailing.role === 'user') {
+    end -= 1
+  }
+  if (end < 0 || !isTopLevelToolReplayItem(input[end])) {
+    return new Set()
+  }
+  let start = end
+  while (start >= 0 && isTopLevelToolReplayItem(input[start])) {
+    start -= 1
+  }
+  const keep = new Set()
+  for (let index = start + 1; index <= end; index += 1) {
+    keep.add(index)
+  }
+  return keep
+}
+
 function flattenResponseInput(input, options = {}) {
   if (typeof input === 'string') {
     return [{ role: 'user', content: input }]
@@ -260,6 +297,7 @@ function flattenResponseInput(input, options = {}) {
 
   const messages = []
   let pendingUserParts = []
+  const recentTopLevelReplayIndexes = collectRecentTopLevelReplayIndexes(input)
 
   const flushPendingUserParts = () => {
     const message = buildUserMessageFromParts(pendingUserParts)
@@ -269,7 +307,7 @@ function flattenResponseInput(input, options = {}) {
     pendingUserParts = []
   }
 
-  for (const item of input) {
+  for (const [index, item] of input.entries()) {
     if (typeof item === 'string') {
       pendingUserParts.push({ type: 'text', text: item })
       continue
@@ -281,13 +319,14 @@ function flattenResponseInput(input, options = {}) {
 
     if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output' || item.type === 'local_shell_call_output' || item.type === 'shell_call_output' || item.type === 'tool_result') {
       flushPendingUserParts()
-      if (options.allowTopLevelToolReplay) {
+      if (options.allowTopLevelToolReplay || recentTopLevelReplayIndexes.has(index)) {
         messages.push(convertResponseToolOutputItem(item))
         createResponseInputTrace(options.trace, {
           action: 'keep',
           source: 'top_level',
           type: item.type,
           mapped_role: 'tool',
+          recent_replay_window: recentTopLevelReplayIndexes.has(index),
         })
       } else {
         createResponseInputTrace(options.trace, {
@@ -302,13 +341,14 @@ function flattenResponseInput(input, options = {}) {
 
     if (item.type === 'function_call' || item.type === 'custom_tool_call' || item.type === 'local_shell_call' || item.type === 'shell_call') {
       flushPendingUserParts()
-      if (options.allowTopLevelToolReplay) {
+      if (options.allowTopLevelToolReplay || recentTopLevelReplayIndexes.has(index)) {
         messages.push(convertResponseToolCallItem(item))
         createResponseInputTrace(options.trace, {
           action: 'keep',
           source: 'top_level',
           type: item.type,
           mapped_role: 'assistant_tool_call',
+          recent_replay_window: recentTopLevelReplayIndexes.has(index),
         })
       } else {
         createResponseInputTrace(options.trace, {
