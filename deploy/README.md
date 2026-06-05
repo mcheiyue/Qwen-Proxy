@@ -44,6 +44,7 @@ RESPONSES_STORE_REDIS_KEY=qwen2api:responses
 RESPONSES_STORE_TTL_SECONDS=1800
 RESPONSES_DEBUG_DUMP=false
 RESPONSES_DEBUG_DUMP_DIR=./logs/responses-debug
+SANITIZE_VISIBLE_OUTPUT=true
 TOOL_RESULT_MAX_CHARS=12000
 TOOL_RESULT_TAIL_CHARS=2000
 QWEN_PROXY_HOST_PORT=17860
@@ -190,6 +191,10 @@ npm run smoke:opencode -- --thinking
 - `RESPONSES_STORE_BACKEND`（当前支持 `memory` / `file` / `redis`）
 - `RESPONSES_STORE_FILE`
 - `RESPONSES_STORE_REDIS_KEY`
+
+如果需要临时关闭可见正文净化（例如排查模型原始输出），可调整：
+
+- `SANITIZE_VISIBLE_OUTPUT`
 
 如果需要定位 OpenCode / Responses 复杂 input 的串台或工具回灌问题，可临时开启：
 

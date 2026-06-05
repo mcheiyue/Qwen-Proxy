@@ -252,6 +252,23 @@ function assertNoProtocolLeak(text, label) {
   }
 }
 
+function assertNoThinkingLeak(text, label) {
+  const value = String(text || '')
+  const forbidden = [
+    /thinking process\s*:/i,
+    /reasoning process\s*:/i,
+    /thought process\s*:/i,
+    /thinking\s*:/i,
+    /思考过程\s*[:：]/,
+    /思考\s*[:：]/,
+    /推理过程\s*[:：]/,
+    /\b1\.\s*\*\*analyze the request\*\*\s*:/i,
+  ]
+  if (forbidden.some((pattern) => pattern.test(value))) {
+    throw new Error(`${label}: detected leaked reasoning text in visible output`)
+  }
+}
+
 function assertFunctionCallOutput(body, label) {
   assertObject({ body }, label)
   if (body.object !== 'response' || !Array.isArray(body.output)) {
@@ -443,13 +460,14 @@ async function run() {
       if (hasReasoning) {
         throw new Error(`responses thinking ignored: expected no response.reasoning.delta when reasoning.effort=${thinkingEffort} is ignored`)
       }
-      const textPayload = result.events
+       const textPayload = result.events
         .filter((event) => event.event === 'response.output_text.delta')
         .map((event) => parseEventData(event, 'responses thinking ignored'))
         .filter((payload) => payload && typeof payload.delta === 'string')
         .map((payload) => payload.delta)
         .join('')
       assertNoProtocolLeak(textPayload, 'responses thinking ignored')
+      assertNoThinkingLeak(textPayload, 'responses thinking ignored')
       return { status: result.status, model: thinkingModel, effort: thinkingEffort }
     })
   }

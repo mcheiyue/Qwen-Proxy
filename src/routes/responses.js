@@ -11,6 +11,7 @@ const { generateUUID, isJson } = require('../utils/tools.js')
 const { createUsageObject } = require('../utils/precise-tokenizer.js')
 const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
 const { createResponseStore } = require('../utils/response-store.js')
+const { sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 const config = require('../config/index.js')
 
 const responseStoreApi = createResponseStore({
@@ -94,6 +95,11 @@ function buildRouteErrorBody(req, message, code) {
     code,
     request_id: req?.requestId || null,
   }
+}
+
+function sanitizeVisibleText(text) {
+  if (!config.sanitizeVisibleOutput) return text
+  return sanitizeVisibleOutput(text)
 }
 
 function stringifyResponseContent(value) {
@@ -598,7 +604,7 @@ function buildResponseOutputFromMessage(message) {
       type: 'message',
       id: `msg_${generateUUID()}`,
       role: 'assistant',
-      content: [{ type: 'output_text', text: message.content }],
+      content: [{ type: 'output_text', text: sanitizeVisibleText(message.content) }],
     })
   }
 
@@ -949,10 +955,12 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
 
     const emitOutputText = (text) => {
       if (!text) return
+      const sanitized = sanitizeVisibleText(text)
+      if (!sanitized) return
       const item = ensureMessageItem()
       const part = ensureMessageContentPart()
-      textBuffer += text
-      part.text += text
+      textBuffer += sanitized
+      part.text += sanitized
       writeEvent('response.output_text.delta', {
         type: 'response.output_text.delta',
         id: responseId,
@@ -960,7 +968,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         item_id: item.id,
         output_index: outputItems.indexOf(item),
         content_index: item.content.indexOf(part),
-        delta: text,
+        delta: sanitized,
       })
     }
 
@@ -1067,7 +1075,14 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         created_at: createdAt,
         status: 'in_progress',
         model,
-        output,
+        output: output.map((item) => item && item.type === 'message' && Array.isArray(item.content)
+          ? {
+              ...item,
+              content: item.content.map((part) => part && (part.type === 'output_text' || part.type === 'text')
+                ? { ...part, text: sanitizeVisibleText(part.text) }
+                : part),
+            }
+          : item),
       }
       if (usage.prompt_tokens || usage.completion_tokens || usage.total_tokens) {
         partialResponse.usage = buildResponseUsage(usage)
@@ -1234,6 +1249,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         }
 
         if (messageItem && messageContentPart) {
+          const sanitizedFinalText = sanitizeVisibleText(textBuffer)
           writeEvent('response.output_text.done', {
             type: 'response.output_text.done',
             id: responseId,
@@ -1241,7 +1257,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
             item_id: messageItem.id,
             output_index: output.findIndex((item) => item.id === messageItem.id),
             content_index: 0,
-            text: textBuffer,
+            text: sanitizedFinalText,
           })
           writeEvent('response.content_part.done', {
             type: 'response.content_part.done',
@@ -1250,7 +1266,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
             item_id: messageItem.id,
             output_index: output.findIndex((item) => item.id === messageItem.id),
             content_index: 0,
-            part: { type: 'output_text', text: textBuffer },
+            part: { type: 'output_text', text: sanitizedFinalText },
           })
           writeEvent('response.output_item.done', {
             type: 'response.output_item.done',

@@ -5,6 +5,7 @@ const accountManager = require('../utils/account.js')
 const config = require('../config/index.js')
 const { logger } = require('../utils/logger')
 const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
+const { sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 
 const buildRequestLogMeta = (req, extra = null) => {
     const meta = {
@@ -21,6 +22,11 @@ const buildRequestErrorBody = (req, message, code) => ({
     code,
     request_id: req?.requestId || null
 })
+
+const sanitizeVisibleText = (text) => {
+    if (!config.sanitizeVisibleOutput) return text
+    return sanitizeVisibleOutput(text)
+}
 
 const requiresToolCall = (toolChoice) => {
     if (toolChoice === 'required') return true
@@ -187,7 +193,7 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                             const imageContent = `${newImageMarkdownList.join('\n\n')}\n\n`
                             completionContent += imageContent
                             newImageMarkdownList.forEach(item => emittedImageMarkdownSet.add(item))
-                            writeChunk({ "content": imageContent })
+                            writeChunk({ "content": sanitizeVisibleText(imageContent) })
                         }
                     }
 
@@ -219,16 +225,16 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                                 completionContent += pendingImageContent
                                 pendingImageMarkdownList.forEach(item => emittedImageMarkdownSet.add(item))
                                 pendingImageMarkdownList = []
-                                writeChunk({ "content": pendingImageContent })
+                                writeChunk({ "content": sanitizeVisibleText(pendingImageContent) })
                             }
                         }
                         currentPhase = 'answer'
                         if (sieve) {
                             const out = sieve.push(content)
-                            if (out.textDelta) writeChunk({ "content": out.textDelta })
+                            if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(out.textDelta) })
                             if (out.toolCallsDelta) writeToolCallDeltas(out.toolCallsDelta)
                         } else {
-                            writeChunk({ "content": content })
+                            writeChunk({ "content": sanitizeVisibleText(content) })
                         }
                     }
                 } catch (error) {
@@ -244,14 +250,14 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                 // Flush any pending content held by the tool-call sieve
                 if (sieve) {
                     const out = sieve.flush()
-                    if (out.textDelta) writeChunk({ "content": out.textDelta })
+                    if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(out.textDelta) })
                     if (out.toolCallsDelta) writeToolCallDeltas(out.toolCallsDelta)
                 }
 
                 // Append search info for non-thinking mode
                 if ((config.outThink === false || !enable_thinking) && web_search_info && config.searchInfoMode === "text") {
                     const webSearchTable = await accountManager.generateMarkdownTable(web_search_info, "text")
-                    writeChunk({ "content": `\n\n---\n${webSearchTable}` })
+                    writeChunk({ "content": sanitizeVisibleText(`\n\n---\n${webSearchTable}`) })
                 }
 
                 if (totalTokens.prompt_tokens === 0 && totalTokens.completion_tokens === 0) {
@@ -324,7 +330,7 @@ const writeBufferedChatCompletionAsStream = (res, responseData) => {
         writeChunk({ reasoning_content: message.reasoning_content })
     }
     if (message.content) {
-        writeChunk({ content: message.content })
+        writeChunk({ content: sanitizeVisibleText(message.content) })
     }
     if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
         writeChunk({
@@ -494,20 +500,20 @@ const handleNonStreamResponse = async (req, res, response, enable_thinking, enab
             totalTokens.completion_tokens = Math.max(0, totalTokens.completion_tokens || 0)
             totalTokens.total_tokens = totalTokens.prompt_tokens + totalTokens.completion_tokens
 
-            const message = { "role": "assistant", "content": fullContent }
+            const message = { "role": "assistant", "content": sanitizeVisibleText(fullContent) }
             if (reasoningContent) {
                 message.reasoning_content = reasoningContent
             }
 
             let finishReason = "stop"
-            if (toolcallEnabled && fullContent) {
-                const parsed = parseToolCallsFromText(fullContent)
-                if (parsed.toolCalls.length > 0) {
-                    message.content = parsed.content
-                    message.tool_calls = parsed.toolCalls
-                    finishReason = "tool_calls"
+                if (toolcallEnabled && fullContent) {
+                    const parsed = parseToolCallsFromText(fullContent)
+                    if (parsed.toolCalls.length > 0) {
+                        message.content = sanitizeVisibleText(parsed.content)
+                        message.tool_calls = parsed.toolCalls
+                        finishReason = "tool_calls"
+                    }
                 }
-            }
 
             return {
                 "id": `chatcmpl-${generateUUID()}`,
