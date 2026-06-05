@@ -591,6 +591,7 @@ function buildResponseOutputFromMessage(message) {
         call_id: tc.id || generateUUID(),
         name: tc.function?.name || '',
         arguments: tc.function?.arguments || '{}',
+        status: 'completed',
       })
     }
   }
@@ -613,6 +614,7 @@ function buildResponseObject(model, openaiResponse) {
     status: 'completed',
     model,
     output: buildResponseOutputFromMessage(message),
+    incomplete_details: null,
     usage: buildResponseUsage(openaiResponse?.usage),
   }
 }
@@ -625,6 +627,7 @@ function buildInProgressResponseObject(model, responseId) {
     status: 'in_progress',
     model,
     output: [],
+    incomplete_details: null,
   }
 }
 
@@ -981,6 +984,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
             call_id: existing.id,
             name: existing.name || '',
             arguments: '',
+            status: 'in_progress',
           }
           outputItems.push(item)
           existing.outputIndex = outputItems.length - 1
@@ -1029,6 +1033,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
           call_id: tc.id,
           name: tc.name || '',
           arguments: tc.arguments || '{}',
+          status: 'in_progress',
         })
       }
 
@@ -1181,6 +1186,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
             call_id: tc.id,
             name: tc.name || '',
             arguments: tc.arguments || '{}',
+            status: 'completed',
           }
           output.push(item)
           writeEvent('response.function_call_arguments.done', {
@@ -1253,6 +1259,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
           status: 'completed',
           model,
           output,
+          incomplete_details: null,
           usage: buildResponseUsage(usage),
         }, responseMetadata))
 
