@@ -259,9 +259,11 @@ function assertNoThinkingLeak(text, label) {
     /reasoning process\s*:/i,
     /thought process\s*:/i,
     /thinking\s*:/i,
+    /\*\*\s*(?:thinking process|reasoning process|thought process)\s*\*\*\s*[:：]/i,
     /思考过程\s*[:：]/,
     /思考\s*[:：]/,
     /推理过程\s*[:：]/,
+    /\*\*\s*(?:思考过程|思考|推理过程|一句话介绍)\s*\*\*\s*[:：]/,
     /\b1\.\s*\*\*analyze the request\*\*\s*:/i,
   ]
   if (forbidden.some((pattern) => pattern.test(value))) {
@@ -437,6 +439,7 @@ async function run() {
       if (!message || typeof message.reasoning_content !== 'string' || !message.reasoning_content.trim()) {
         throw new Error(`chat thinking non-stream: expected reasoning_content from reasoning_effort=${thinkingEffort}`)
       }
+      assertNoThinkingLeak(message.content || '', 'chat thinking non-stream visible content')
       return { status: result.status, model: thinkingModel, effort: thinkingEffort }
     })
 

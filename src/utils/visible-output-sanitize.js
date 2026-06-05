@@ -5,11 +5,17 @@ const THINKING_PREFIX_PATTERNS = [
   /^(?:thinking|thought process)\s*[:：]\s*/i,
   /^(?:let'?s think step by step|let us think step by step)\s*[:：-]?\s*/i,
   /^(?:思考过程|思考|推理过程)\s*[:：]\s*/,
+  /^\s*\*\*(?:thinking process|reasoning process|thought process|思考过程|推理过程)\*\*\s*[:：]\s*/i,
 ]
 
 const ENUMERATED_THINKING_HEADER_PATTERN = /^(?:thinking process|reasoning process)\s*:\s*\n+/i
 const ANALYZE_REQUEST_PATTERN = /^\s*\d+\.\s*\*\*analyze the request\*\*\s*:/i
 const ANSWER_MARKER_PATTERN = /(?:^|\n)\s*(?:final answer|answer|最终答案|回答)\s*[:：]\s*/i
+const META_ANALYSIS_PATTERNS = [
+  /^\s*(?:the user wants me to|the user asked me to|the user is asking me to)\b[\s\S]*?(?=\n\s*(?:i am|i'm|我是|the safest approach is|最稳妥的做法是)|$)/i,
+  /^\s*(?:用户设定了我的身份为|用户将我的身份设定为|用户要求我|用户希望我|用户现在要我)[\s\S]*?(?=\n\s*(?:我是|我会|最稳妥的做法是)|$)/,
+  /^\s*\*\*(?:思考过程|thinking process|reasoning process)\*\*\s*[:：][\s\S]*?(?=\n\s*\*\*(?:最终答案|一句话介绍|answer|final answer)\*\*\s*[:：]|$)/i,
+]
 const MALFORMED_PROTOCOL_PATTERNS = [
   /<\|DSML\|[^>\n]*>?/gi,
   /<\/\|DSML\|[^>\n]*>?/gi,
@@ -63,6 +69,27 @@ function stripThinkingPrefix(text) {
   return out
 }
 
+function stripMetaAnalysis(text) {
+  let out = text
+  for (const pattern of META_ANALYSIS_PATTERNS) {
+    const next = out.replace(pattern, '')
+    out = next
+  }
+
+  const markdownAnswerMarkers = [
+    /(?:^|\n)\s*\*\*(?:最终答案|answer|final answer|一句话介绍)\*\*\s*[:：]\s*/i,
+  ]
+  for (const marker of markdownAnswerMarkers) {
+    const hit = marker.exec(out)
+    if (hit && typeof hit.index === 'number') {
+      out = out.slice(hit.index + hit[0].length).trim()
+      break
+    }
+  }
+
+  return out
+}
+
 function stripMalformedProtocol(text) {
   let out = text
   for (const pattern of MALFORMED_PROTOCOL_PATTERNS) {
@@ -76,6 +103,7 @@ function sanitizeVisibleOutput(text) {
   let out = text
   out = stripMalformedProtocol(out)
   out = stripThinkingPrefix(out)
+  out = stripMetaAnalysis(out)
   out = collapseVisibleWhitespace(out)
   return out
 }
