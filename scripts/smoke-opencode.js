@@ -10,11 +10,12 @@ const thinkingMode = args.has('--thinking')
 const baseUrl = (process.env.SMOKE_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '')
 const apiKey = process.env.SMOKE_API_KEY || process.env.API_KEY || ''
 const model = process.env.SMOKE_MODEL || process.env.DEFAULT_MODEL || DEFAULT_MODEL
-const thinkingModel = process.env.SMOKE_THINKING_MODEL || (model.endsWith('-thinking') ? model : `${model}-thinking`)
+const thinkingModel = process.env.SMOKE_THINKING_MODEL || model
+const thinkingEffort = process.env.SMOKE_THINKING_EFFORT || 'medium'
 const timeoutMs = Number.parseInt(process.env.SMOKE_TIMEOUT_MS || '30000', 10)
 
 function printHelp() {
-  console.log(`Usage: npm run smoke:opencode -- [--thinking]\n\nEnvironment:\n  SMOKE_BASE_URL         Base URL to test. Default: ${DEFAULT_BASE_URL}\n  SMOKE_API_KEY          API key for protected endpoints. Falls back to API_KEY.\n  SMOKE_MODEL            Base model for OpenCode-like scenarios. Default: ${DEFAULT_MODEL}\n  SMOKE_THINKING_MODEL   Optional explicit thinking model. Defaults to <SMOKE_MODEL>-thinking.\n  SMOKE_TIMEOUT_MS       Per-request timeout. Default: 30000\n\nModes:\n  default                Run the OpenCode request matrix (12 checks) without thinking scenarios.\n  --thinking             Also verify a Responses stream scenario with a thinking-enabled model suffix.\n`)
+  console.log(`Usage: npm run smoke:opencode -- [--thinking]\n\nEnvironment:\n  SMOKE_BASE_URL         Base URL to test. Default: ${DEFAULT_BASE_URL}\n  SMOKE_API_KEY          API key for protected endpoints. Falls back to API_KEY.\n  SMOKE_MODEL            Base model for OpenCode-like scenarios. Default: ${DEFAULT_MODEL}\n  SMOKE_THINKING_MODEL   Optional explicit model for the thinking scenario. Defaults to SMOKE_MODEL.\n  SMOKE_THINKING_EFFORT  Reasoning effort for the thinking scenario. Default: medium\n  SMOKE_TIMEOUT_MS       Per-request timeout. Default: 30000\n\nModes:\n  default                Run the OpenCode request matrix (13 checks) without thinking scenarios.\n  --thinking             Also verify a Responses stream scenario using reasoning.effort (14 checks total).\n`)
 }
 
 function authHeaders(extra = {}) {
@@ -352,6 +353,7 @@ async function run() {
   console.log(`Base model: ${model}`)
   if (thinkingMode) {
     console.log(`Thinking model: ${thinkingModel}`)
+    console.log(`Thinking effort: ${thinkingEffort}`)
   }
   if (!apiKey) {
     console.log('No SMOKE_API_KEY/API_KEY provided; protected endpoint checks will fail.')
@@ -407,6 +409,7 @@ async function run() {
           model: thinkingModel,
           input: [developerMessage(), userMessage('请简单介绍一下自己，并先思考再回答。')],
           stream: true,
+          reasoning: { effort: thinkingEffort },
           metadata: { smoke: 'opencode-thinking-stream' },
         }),
       })
@@ -416,9 +419,9 @@ async function run() {
         return typeof payload?.delta === 'string' && payload.delta.length > 0
       })
       if (!hasReasoning) {
-        throw new Error('responses thinking stream: expected response.reasoning.delta from thinking model')
+        throw new Error(`responses thinking stream: expected response.reasoning.delta from reasoning.effort=${thinkingEffort}`)
       }
-      return { status: result.status, model: thinkingModel }
+      return { status: result.status, model: thinkingModel, effort: thinkingEffort }
     })
   }
 

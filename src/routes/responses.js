@@ -525,6 +525,13 @@ function flattenResponseInput(input, options = {}) {
 }
 
 function responsesToOpenAIBody(body, options = {}) {
+  const reasoningEffort = typeof body?.reasoningEffort === 'string'
+    ? body.reasoningEffort
+    : typeof body?.reasoning_effort === 'string'
+      ? body.reasoning_effort
+      : typeof body?.reasoning?.effort === 'string'
+        ? body.reasoning.effort
+        : undefined
   const systemMessages = [
     { role: 'system', content: RESPONSES_OUTPUT_INTEGRITY_GUARD },
     ...(body.instructions ? [{ role: 'system', content: body.instructions }] : []),
@@ -536,6 +543,7 @@ function responsesToOpenAIBody(body, options = {}) {
     tool_choice: body.tool_choice,
     parallel_tool_calls: body.parallel_tool_calls,
     instructions: body.instructions,
+    reasoning_effort: reasoningEffort,
     messages: [
       ...systemMessages,
       ...flattenResponseInput(body.input, {
