@@ -86,6 +86,7 @@ const config = {
     responsesAllowTopLevelToolReplay: process.env.RESPONSES_ALLOW_TOP_LEVEL_TOOL_REPLAY === 'true',
     responsesAllowAssistantToolReplay: process.env.RESPONSES_ALLOW_ASSISTANT_TOOL_REPLAY === 'true',
     responsesAllowReasoningReplay: process.env.RESPONSES_ALLOW_REASONING_REPLAY === 'true',
+    responsesAllowReasoningEffort: process.env.RESPONSES_ALLOW_REASONING_EFFORT === 'true',
     responsesStoreBackend: normalizeResponsesStoreBackend(),
     responsesStoreTtlSeconds: Math.max(60, parseInt(process.env.RESPONSES_STORE_TTL_SECONDS) || 1800),
     responsesStoreFile: process.env.RESPONSES_STORE_FILE || './data/responses-store.json',

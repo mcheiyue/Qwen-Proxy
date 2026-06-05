@@ -40,6 +40,16 @@ function shouldDebugDumpResponses(req, body, metadata) {
   return false
 }
 
+function hasResponsesReasoningRequest(body) {
+  if (!body || typeof body !== 'object') return false
+  if (typeof body.reasoningEffort === 'string' && body.reasoningEffort.trim()) return true
+  if (typeof body.reasoning_effort === 'string' && body.reasoning_effort.trim()) return true
+  const effort = body.reasoning && typeof body.reasoning === 'object' && !Array.isArray(body.reasoning)
+    ? body.reasoning.effort
+    : undefined
+  return typeof effort === 'string' && effort.trim().length > 0
+}
+
 function getResponsesDebugDir() {
   return path.resolve(process.cwd(), config.responsesDebugDumpDir)
 }
@@ -525,13 +535,14 @@ function flattenResponseInput(input, options = {}) {
 }
 
 function responsesToOpenAIBody(body, options = {}) {
-  const reasoningEffort = typeof body?.reasoningEffort === 'string'
+  const requestedReasoningEffort = typeof body?.reasoningEffort === 'string'
     ? body.reasoningEffort
     : typeof body?.reasoning_effort === 'string'
       ? body.reasoning_effort
       : typeof body?.reasoning?.effort === 'string'
         ? body.reasoning.effort
         : undefined
+  const reasoningEffort = config.responsesAllowReasoningEffort ? requestedReasoningEffort : undefined
   const systemMessages = [
     { role: 'system', content: RESPONSES_OUTPUT_INTEGRITY_GUARD },
     ...(body.instructions ? [{ role: 'system', content: body.instructions }] : []),
@@ -1310,6 +1321,11 @@ async function handleResponses(req, res) {
         metadata: responseMetadata,
         input: requestedBody?.input,
       })
+    }
+    if (hasResponsesReasoningRequest(requestedBody) && !config.responsesAllowReasoningEffort) {
+      logger.info('Ignoring Responses reasoning request', 'RESPONSES', '', buildRequestLogMeta(req, {
+        reason: 'responses_reasoning_effort_disabled',
+      }))
     }
     const openaiBody = responsesToOpenAIBody(requestedBody, { trace: normalizationTrace })
     if (debugDumpEnabled) {

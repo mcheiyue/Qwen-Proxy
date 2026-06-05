@@ -15,7 +15,7 @@ const thinkingEffort = process.env.SMOKE_THINKING_EFFORT || 'medium'
 const timeoutMs = Number.parseInt(process.env.SMOKE_TIMEOUT_MS || '30000', 10)
 
 function printHelp() {
-  console.log(`Usage: npm run smoke:opencode -- [--thinking]\n\nEnvironment:\n  SMOKE_BASE_URL         Base URL to test. Default: ${DEFAULT_BASE_URL}\n  SMOKE_API_KEY          API key for protected endpoints. Falls back to API_KEY.\n  SMOKE_MODEL            Base model for OpenCode-like scenarios. Default: ${DEFAULT_MODEL}\n  SMOKE_THINKING_MODEL   Optional explicit model for the thinking scenario. Defaults to SMOKE_MODEL.\n  SMOKE_THINKING_EFFORT  Reasoning effort for the thinking scenario. Default: medium\n  SMOKE_TIMEOUT_MS       Per-request timeout. Default: 30000\n\nModes:\n  default                Run the OpenCode request matrix (13 checks) without thinking scenarios.\n  --thinking             Also verify a Responses stream scenario using reasoning.effort (14 checks total).\n`)
+  console.log(`Usage: npm run smoke:opencode -- [--thinking]\n\nEnvironment:\n  SMOKE_BASE_URL         Base URL to test. Default: ${DEFAULT_BASE_URL}\n  SMOKE_API_KEY          API key for protected endpoints. Falls back to API_KEY.\n  SMOKE_MODEL            Base model for OpenCode-like scenarios. Default: ${DEFAULT_MODEL}\n  SMOKE_THINKING_MODEL   Optional explicit model for the thinking scenario. Defaults to SMOKE_MODEL.\n  SMOKE_THINKING_EFFORT  Reasoning effort for the thinking scenario. Default: medium\n  SMOKE_TIMEOUT_MS       Per-request timeout. Default: 30000\n\nModes:\n  default                Run the OpenCode request matrix (13 checks) without thinking scenarios.\n  --thinking             Verify chat thinking succeeds while Responses ignores reasoning.effort (15 checks total).\n`)
 }
 
 function authHeaders(extra = {}) {
@@ -401,26 +401,55 @@ async function run() {
   })
 
   if (thinkingMode) {
-    await runScenario(results, 'responses thinking stream', async () => {
-      const result = await requestSSE('responses thinking stream', '/v1/responses', {
+    await runScenario(results, 'chat thinking non-stream', async () => {
+      const result = await requestJSON('chat thinking non-stream', '/v1/chat/completions', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json', 'x-smoke-scenario': 'responses-thinking-stream' }),
         body: JSON.stringify({
           model: thinkingModel,
-          input: [developerMessage(), userMessage('请简单介绍一下自己，并先思考再回答。')],
+          stream: false,
+          reasoning_effort: thinkingEffort,
+          messages: [
+            { role: 'system', content: 'You are OpenCode, the best coding agent on the planet.' },
+            { role: 'user', content: '请先思考，再用一句话介绍你自己。' },
+          ],
+        }),
+      })
+      assertObject(result, 'chat thinking non-stream')
+      const message = result.body?.choices?.[0]?.message
+      if (!message || typeof message.reasoning_content !== 'string' || !message.reasoning_content.trim()) {
+        throw new Error(`chat thinking non-stream: expected reasoning_content from reasoning_effort=${thinkingEffort}`)
+      }
+      return { status: result.status, model: thinkingModel, effort: thinkingEffort }
+    })
+
+    await runScenario(results, 'responses thinking ignored', async () => {
+      const result = await requestSSE('responses thinking ignored', '/v1/responses', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json', 'x-smoke-scenario': 'responses-thinking-ignored' }),
+        body: JSON.stringify({
+          model: thinkingModel,
+          input: [developerMessage(), userMessage('请先思考，再用一句话介绍你自己。')],
           stream: true,
           reasoning: { effort: thinkingEffort },
           metadata: { smoke: 'opencode-thinking-stream' },
         }),
       })
-      const hasReasoning = result.events.some((event) => {
-        if (event.event !== 'response.reasoning.delta') return false
-        const payload = parseEventData(event, 'responses thinking stream')
-        return typeof payload?.delta === 'string' && payload.delta.length > 0
-      })
-      if (!hasReasoning) {
-        throw new Error(`responses thinking stream: expected response.reasoning.delta from reasoning.effort=${thinkingEffort}`)
+      const eventNames = new Set(result.events.map((event) => event.event).filter(Boolean))
+      if (!eventNames.has('response.created') || !eventNames.has('response.completed')) {
+        throw new Error('responses thinking ignored: expected response.created and response.completed')
       }
+      const hasReasoning = result.events.some((event) => event.event === 'response.reasoning.delta')
+      if (hasReasoning) {
+        throw new Error(`responses thinking ignored: expected no response.reasoning.delta when reasoning.effort=${thinkingEffort} is ignored`)
+      }
+      const textPayload = result.events
+        .filter((event) => event.event === 'response.output_text.delta')
+        .map((event) => parseEventData(event, 'responses thinking ignored'))
+        .filter((payload) => payload && typeof payload.delta === 'string')
+        .map((payload) => payload.delta)
+        .join('')
+      assertNoProtocolLeak(textPayload, 'responses thinking ignored')
       return { status: result.status, model: thinkingModel, effort: thinkingEffort }
     })
   }
