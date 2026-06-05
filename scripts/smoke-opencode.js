@@ -239,6 +239,13 @@ function assertFunctionCallOutput(body, label) {
   }
 }
 
+function assertResponseObject(body, label) {
+  assertObject({ body }, label)
+  if (body.object !== 'response' || typeof body.id !== 'string' || !body.id) {
+    throw new Error(`${label}: expected response object with non-empty id`)
+  }
+}
+
 function assertResponsesToolStream(events, label) {
   const payloads = events
     .map((event) => ({ event: event.event, payload: parseEventData(event, label) }))
@@ -402,6 +409,61 @@ async function run() {
     })
     assertFunctionCallOutput(result.body, 'responses tools non-stream')
     return { status: result.status }
+  })
+
+  await runScenario(results, 'responses store crud', async () => {
+    const created = await requestJSON('responses store crud create', '/v1/responses', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json', 'x-smoke-scenario': 'responses-store-crud' }),
+      body: JSON.stringify({
+        model,
+        input: [developerMessage(), userMessage('Reply with ok and store the response.')],
+        stream: false,
+        metadata: { smoke: 'opencode-store-crud' },
+      }),
+    })
+    assertResponseObject(created.body, 'responses store crud create')
+
+    const responseId = created.body.id
+    const fetched = await requestJSON('responses store crud get', `/v1/responses/${responseId}`, {
+      headers: authHeaders(),
+    })
+    assertResponseObject(fetched.body, 'responses store crud get')
+    if (fetched.body.id !== responseId) {
+      throw new Error('responses store crud get: expected matching response id')
+    }
+
+    const listed = await requestJSON('responses store crud list', '/v1/responses?limit=5', {
+      headers: authHeaders(),
+    })
+    assertObject(listed, 'responses store crud list')
+    if (listed.body.object !== 'list' || !Array.isArray(listed.body.data)) {
+      throw new Error('responses store crud list: expected list payload')
+    }
+    if (!listed.body.data.some((item) => item && item.id === responseId)) {
+      throw new Error('responses store crud list: expected created response id in list')
+    }
+
+    const cancel = await requestJSON('responses store crud cancel', `/v1/responses/${responseId}/cancel`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({}),
+    })
+    assertResponseObject(cancel.body, 'responses store crud cancel')
+    if (!['completed', 'cancelled', 'in_progress', 'failed', 'incomplete'].includes(String(cancel.body.status || ''))) {
+      throw new Error(`responses store crud cancel: unexpected status ${JSON.stringify(cancel.body.status)}`)
+    }
+
+    const deleted = await requestJSON('responses store crud delete', `/v1/responses/${responseId}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    assertObject(deleted, 'responses store crud delete')
+    if (deleted.body.object !== 'response.deleted' || deleted.body.deleted !== true || deleted.body.id !== responseId) {
+      throw new Error('responses store crud delete: expected response.deleted payload')
+    }
+
+    return { status: created.status }
   })
 
   await runScenario(results, 'responses tools stream', async () => {
