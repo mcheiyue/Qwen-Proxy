@@ -13,6 +13,11 @@
 
 - `docker-compose.prod.yml`：灰度容器模板
 
+## 本地脚本
+
+- `npm run smoke:gray`：部署侧基础 smoke
+- `npm run smoke:opencode`：按 OpenCode 请求形状模拟 chat/responses 工具调用矩阵
+
 ## 默认约束
 
 - 容器名默认：`qwen-proxy-test`
@@ -130,6 +135,31 @@ npm run smoke:gray -- --tools
 
 ```powershell
 npm run smoke:gray -- --full --stream --tools
+```
+
+如果要按 OpenCode 的典型请求形状复跑工具调用与 replay 场景，可执行：
+
+```powershell
+$env:SMOKE_BASE_URL = "http://127.0.0.1:17860"
+$env:SMOKE_API_KEY = "你的对外 API Key"
+$env:SMOKE_MODEL = "qwen3.7-plus"
+npm run smoke:opencode
+```
+
+这套模拟矩阵会覆盖：
+
+- `/v1/responses` 基础 stream
+- `required` 工具调用的 stream / non-stream
+- recent top-level tool replay follow-up
+- 多文件 replay follow-up
+- `Tool execution aborted` follow-up
+- `/v1/chat/completions` 工具调用基线
+
+如需额外验证 thinking 模型后缀链路，可显式指定：
+
+```powershell
+$env:SMOKE_THINKING_MODEL = "qwen3.7-plus-thinking"
+npm run smoke:opencode -- --thinking
 ```
 
 ## 灰度验证建议

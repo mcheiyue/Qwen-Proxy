@@ -7,6 +7,7 @@
     "start": "node src/start.js",
     "dev": "nodemon src/start.js",
     "smoke:gray": "node scripts/smoke-gray.js",
+    "smoke:opencode": "node scripts/smoke-opencode.js",
     "build:webui": "cd webui && npm install && npm run build",
     "vercel-build": "cd webui && npm install && npm run build"
   },
