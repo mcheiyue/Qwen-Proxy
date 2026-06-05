@@ -131,6 +131,35 @@ async function requestJSON(label, path, options = {}) {
   }
 }
 
+async function requestJSONAllowingStatus(label, path, allowedStatuses, options = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const started = Date.now()
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...(options.headers || {}),
+      },
+    })
+    const text = await response.text()
+    let body = null
+    try {
+      body = text ? JSON.parse(text) : null
+    } catch (_) {
+      body = text
+    }
+    const statusAllowed = Array.isArray(allowedStatuses) && allowedStatuses.includes(response.status)
+    if (!response.ok && !statusAllowed) {
+      throw new Error(`${label} returned HTTP ${response.status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`)
+    }
+    return { label, status: response.status, ms: Date.now() - started, body }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function requestSSE(label, path, options = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -444,14 +473,21 @@ async function run() {
       throw new Error('responses store crud list: expected created response id in list')
     }
 
-    const cancel = await requestJSON('responses store crud cancel', `/v1/responses/${responseId}/cancel`, {
+    const cancel = await requestJSONAllowingStatus('responses store crud cancel', `/v1/responses/${responseId}/cancel`, [409], {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({}),
     })
-    assertResponseObject(cancel.body, 'responses store crud cancel')
-    if (!['completed', 'cancelled', 'in_progress', 'failed', 'incomplete'].includes(String(cancel.body.status || ''))) {
-      throw new Error(`responses store crud cancel: unexpected status ${JSON.stringify(cancel.body.status)}`)
+    if (cancel.status === 409) {
+      assertObject(cancel, 'responses store crud cancel conflict')
+      if (cancel.body.code !== 'response_not_cancellable') {
+        throw new Error(`responses store crud cancel: expected response_not_cancellable, got ${JSON.stringify(cancel.body)}`)
+      }
+    } else {
+      assertResponseObject(cancel.body, 'responses store crud cancel')
+      if (!['completed', 'cancelled', 'in_progress', 'failed', 'incomplete'].includes(String(cancel.body.status || ''))) {
+        throw new Error(`responses store crud cancel: unexpected status ${JSON.stringify(cancel.body.status)}`)
+      }
     }
 
     const deleted = await requestJSON('responses store crud delete', `/v1/responses/${responseId}`, {
