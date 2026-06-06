@@ -10,8 +10,12 @@ class AccountRotator {
     this.currentIndex = 0
     this.lastUsedTimes = new Map()
     this.failureCounts = new Map()
+    this.rateLimitStrikes = new Map()
+    this.rateLimitedUntil = new Map()
     this.maxFailures = 3
     this.cooldownPeriod = 5 * 60 * 1000 // 5 minute cooldown
+    this.rateLimitBaseCooldownMs = 600 * 1000
+    this.rateLimitMaxCooldownMs = 3600 * 1000
   }
 
   /**
@@ -109,12 +113,35 @@ class AccountRotator {
     }
   }
 
+  recordRateLimit(email) {
+    if (!email) return null
+
+    const strikes = (this.rateLimitStrikes.get(email) || 0) + 1
+    const cooldownMs = Math.min(
+      this.rateLimitMaxCooldownMs,
+      this.rateLimitBaseCooldownMs * (2 ** Math.max(0, strikes - 1))
+    )
+    const until = Date.now() + cooldownMs
+
+    this.rateLimitStrikes.set(email, strikes)
+    this.rateLimitedUntil.set(email, until)
+    logger.warn(`Account ${email} hit HTTP 429, cooldown ${Math.round(cooldownMs / 1000)}s`, 'ACCOUNT')
+
+    return { strikes, cooldownMs, until }
+  }
+
   /**
    * Reset account failure count
    * @param {string} email - Email address
    */
   resetFailures(email) {
     this.failureCounts.delete(email)
+    this.resetRateLimit(email)
+  }
+
+  resetRateLimit(email) {
+    this.rateLimitStrikes.delete(email)
+    this.rateLimitedUntil.delete(email)
   }
 
   /**
@@ -131,6 +158,9 @@ class AccountRotator {
       const email = account.email
       usageStats[email] = {
         failures: this.failureCounts.get(email) || 0,
+        rateLimitStrikes: this.rateLimitStrikes.get(email) || 0,
+        rateLimitedUntil: this.rateLimitedUntil.get(email) || null,
+        rateLimitRemainingMs: this._getRateLimitRemainingMs(email),
         lastUsed: this.lastUsedTimes.get(email) || null,
         available: this._isAccountAvailable(account)
       }
@@ -158,6 +188,10 @@ class AccountRotator {
     // Operator-disabled accounts stay in the list (so the toggle is
     // reversible without losing credentials) but never get picked.
     if (account.disabled) {
+      return false
+    }
+
+    if (this._isRateLimited(account.email)) {
       return false
     }
 
@@ -221,6 +255,22 @@ class AccountRotator {
     this.lastUsedTimes.set(email, Date.now())
   }
 
+  _getRateLimitRemainingMs(email) {
+    const until = this.rateLimitedUntil.get(email)
+    if (!until) return 0
+    return Math.max(0, until - Date.now())
+  }
+
+  _isRateLimited(email) {
+    const until = this.rateLimitedUntil.get(email)
+    if (!until) return false
+    if (Date.now() < until) return true
+
+    this.rateLimitedUntil.delete(email)
+    this.rateLimitStrikes.delete(email)
+    return false
+  }
+
   /** @private */
   _cleanupRecords() {
     const currentEmails = new Set(this.accounts.map(acc => acc.email))
@@ -236,6 +286,18 @@ class AccountRotator {
         this.lastUsedTimes.delete(email)
       }
     }
+
+    for (const email of this.rateLimitStrikes.keys()) {
+      if (!currentEmails.has(email)) {
+        this.rateLimitStrikes.delete(email)
+      }
+    }
+
+    for (const email of this.rateLimitedUntil.keys()) {
+      if (!currentEmails.has(email)) {
+        this.rateLimitedUntil.delete(email)
+      }
+    }
   }
 
   /**
@@ -245,6 +307,8 @@ class AccountRotator {
     this.currentIndex = 0
     this.lastUsedTimes.clear()
     this.failureCounts.clear()
+    this.rateLimitStrikes.clear()
+    this.rateLimitedUntil.clear()
   }
 }
 

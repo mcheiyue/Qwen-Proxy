@@ -118,6 +118,9 @@ const sendChatRequest = async (body) => {
             }, requestConfig)
 
             if (response.status === 200) {
+                if (currentEmail && typeof accountManager.resetAccountRateLimit === 'function') {
+                    accountManager.resetAccountRateLimit(currentEmail)
+                }
                 return {
                     currentToken: currentToken,
                     status: true,
@@ -128,6 +131,13 @@ const sendChatRequest = async (body) => {
         } catch (error) {
             lastError = error
             logger.error(`Chat request failed (attempt ${attempt}/${MAX_RETRIES}, proxy: ${getProxyHost(currentProxy)}): ${error.message}`, 'REQUEST')
+
+            const statusCode = error?.response?.status
+            if (statusCode === 429 && currentEmail && typeof accountManager.recordAccountRateLimit === 'function') {
+                const cooldown = accountManager.recordAccountRateLimit(currentEmail)
+                logger.warn(`Account ${currentEmail} hit HTTP 429, exponential cooldown ${Math.round((cooldown?.cooldownMs || 0) / 1000)}s`, 'REQUEST')
+                break
+            }
 
             // Only proxy-shaped errors are retryable. Auth errors, 4xx and
             // upstream-format failures should bail immediately so the

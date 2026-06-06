@@ -530,12 +530,20 @@ class Account {
         this.accountRotator.recordFailure(email)
     }
 
+    recordAccountRateLimit(email) {
+        return this.accountRotator.recordRateLimit(email)
+    }
+
     /**
      * Reset account failures
      * @param {string} email - Email address
      */
     resetAccountFailures(email) {
         this.accountRotator.resetFailures(email)
+    }
+
+    resetAccountRateLimit(email) {
+        this.accountRotator.resetRateLimit(email)
     }
 
     /** @private */
