@@ -5,6 +5,7 @@ const { getLatestModels } = require('../models/models-map.js')
 const config = require('../config/index.js')
 const accountManager = require('./account.js')
 const CacheManager = require('./img-caches.js')
+const { isThinkingEnabled, applyReasoningEffortPolicy } = require('./thinking-policy.js')
 
 const MODEL_SUFFIXES = [
     '-thinking-search',
@@ -207,57 +208,6 @@ const isChatType = (model) => {
     if (model.includes('-video')) return 't2v'
     if (model.includes('-deep-research')) return 'deep_research'
     return 't2t'
-}
-
-/**
- * Determine thinking configuration
- * Supports multiple ways to enable thinking:
- *   1. Model suffix: model name contains '-thinking'
- *   2. enable_thinking: true/false parameter
- *   3. reasoning_effort: 'low'/'medium'/'high' (OpenAI compatible)
- * Default: thinking is OFF unless explicitly enabled
- *
- * @param {string} model - Model name
- * @param {boolean} enable_thinking - Whether thinking is enabled
- * @param {number} thinking_budget - Thinking budget (token count)
- * @param {string} reasoning_effort - OpenAI-compatible reasoning effort: 'low'/'medium'/'high'
- * @returns {object} Thinking config object
- */
-const isThinkingEnabled = (model, enable_thinking, thinking_budget, reasoning_effort) => {
-    // reasoning_effort -> thinking_budget mapping
-    const EFFORT_BUDGET_MAP = {
-        'low': 4096,
-        'medium': 16384,
-        'high': 81920,
-    }
-
-    const thinking_config = {
-        "output_schema": "phase",
-        "thinking_enabled": false,
-        "thinking_budget": 81920
-    }
-
-    if (!model) return thinking_config
-
-    // Enable thinking if any of these conditions are true:
-    //   1. Model name contains '-thinking' suffix
-    //   2. enable_thinking is explicitly true
-    //   3. reasoning_effort is set (any valid value)
-    const effortLower = reasoning_effort ? String(reasoning_effort).toLowerCase() : null
-    const hasReasoningEffort = effortLower && EFFORT_BUDGET_MAP[effortLower] !== undefined
-
-    if (model.includes('-thinking') || enable_thinking === true || enable_thinking === 'true' || hasReasoningEffort) {
-        thinking_config.thinking_enabled = true
-    }
-
-    // Budget priority: explicit thinking_budget > reasoning_effort mapping > default
-    if (thinking_budget && !isNaN(Number(thinking_budget)) && Number(thinking_budget) > 0) {
-        thinking_config.thinking_budget = Number(thinking_budget)
-    } else if (hasReasoningEffort) {
-        thinking_config.thinking_budget = EFFORT_BUDGET_MAP[effortLower]
-    }
-
-    return thinking_config
 }
 
 /**
@@ -504,6 +454,7 @@ const processOriginalLogic = async (messages, thinking_config, chat_type, imgCac
 module.exports = {
     isChatType,
     isThinkingEnabled,
+    applyReasoningEffortPolicy,
     parserModel,
     parserMessages
 }

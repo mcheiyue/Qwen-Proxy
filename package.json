@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/start.js",
     "dev": "nodemon src/start.js",
+    "test:unit": "node --test \"tests/unit/*.test.js\"",
     "smoke:gray": "node scripts/smoke-gray.js",
     "smoke:opencode": "node scripts/smoke-opencode.js",
     "build:webui": "cd webui && npm install && npm run build",

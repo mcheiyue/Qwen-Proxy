@@ -75,6 +75,14 @@ const normalizeResponsesStoreBackend = () => {
   return process.env.DATA_SAVE_MODE === 'file' ? 'file' : 'memory'
 }
 
+const normalizeChatReasoningEffortPolicy = () => {
+  const raw = String(process.env.CHAT_REASONING_EFFORT_POLICY || 'ignore').trim().toLowerCase()
+  if (raw === 'downgrade' || raw === 'passthrough') {
+    return raw
+  }
+  return 'ignore'
+}
+
 const config = {
     dataSaveMode: process.env.DATA_SAVE_MODE || "none",
     defaultModel: process.env.DEFAULT_MODEL || 'qwen3.6-plus',
@@ -87,6 +95,7 @@ const config = {
     responsesAllowAssistantToolReplay: process.env.RESPONSES_ALLOW_ASSISTANT_TOOL_REPLAY === 'true',
     responsesAllowReasoningReplay: process.env.RESPONSES_ALLOW_REASONING_REPLAY === 'true',
     responsesAllowReasoningEffort: process.env.RESPONSES_ALLOW_REASONING_EFFORT === 'true',
+    chatReasoningEffortPolicy: normalizeChatReasoningEffortPolicy(),
     sanitizeVisibleOutput: process.env.SANITIZE_VISIBLE_OUTPUT === 'false' ? false : true,
     responsesStoreBackend: normalizeResponsesStoreBackend(),
     responsesStoreTtlSeconds: Math.max(60, parseInt(process.env.RESPONSES_STORE_TTL_SECONDS) || 1800),
