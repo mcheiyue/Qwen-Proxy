@@ -50,6 +50,11 @@ const resolveReasoningEffort = (reasoning_effort, reasoning) => {
         return reasoning_effort
     }
 
+    if (typeof reasoning === 'string') {
+        const trimmedReasoning = reasoning.trim()
+        if (trimmedReasoning) return trimmedReasoning
+    }
+
     if (reasoning && typeof reasoning === 'object' && !Array.isArray(reasoning)) {
         const effort = reasoning.effort
         if (typeof effort === 'string') {

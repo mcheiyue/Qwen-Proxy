@@ -73,6 +73,24 @@ test('reasoning object effort is used when top-level reasoning_effort is absent'
   assert.equal(thinkingConfig.thinking_budget, 81920)
 })
 
+test('reasoning string is used when top-level reasoning_effort is absent', () => {
+  const effort = resolveReasoningEffort(undefined, 'high')
+  const effectiveEffort = applyReasoningEffortPolicy(effort, 'passthrough')
+  const thinkingConfig = isThinkingEnabled('qwen3.7-max', undefined, undefined, effectiveEffort)
+
+  assert.equal(effort, 'high')
+  assert.equal(thinkingConfig.thinking_enabled, true)
+  assert.equal(thinkingConfig.thinking_budget, 81920)
+})
+
+test('blank reasoning string does not enable thinking', () => {
+  const effort = resolveReasoningEffort(undefined, '   ')
+  const thinkingConfig = isThinkingEnabled('qwen3.7-max', undefined, undefined, effort)
+
+  assert.equal(effort, undefined)
+  assert.equal(thinkingConfig.thinking_enabled, false)
+})
+
 test('blank top-level reasoning_effort falls back to reasoning object effort', () => {
   const effort = resolveReasoningEffort('   ', { effort: 'medium' })
 
