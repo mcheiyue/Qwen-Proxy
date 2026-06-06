@@ -258,6 +258,18 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                 const strippedTail = thinkingStripper.flush()
                 if (strippedTail) writeChunk({ "content": sanitizeVisibleText(strippedTail) })
 
+                if (sieve && !toolCallsEmitted && completionContent) {
+                    const parsed = parseToolCallsFromText(completionContent, requestBody?.tools)
+                    if (parsed.toolCalls.length > 0) {
+                        writeToolCallDeltas(parsed.toolCalls.map((call, index) => ({
+                            index,
+                            id: call.id,
+                            type: 'function',
+                            function: call.function
+                        })))
+                    }
+                }
+
                 // Append search info for non-thinking mode
                 if ((config.outThink === false || !enable_thinking) && web_search_info && config.searchInfoMode === "text") {
                     const webSearchTable = await accountManager.generateMarkdownTable(web_search_info, "text")
@@ -511,7 +523,7 @@ const handleNonStreamResponse = async (req, res, response, enable_thinking, enab
 
             let finishReason = "stop"
                 if (toolcallEnabled && fullContent) {
-                    const parsed = parseToolCallsFromText(fullContent)
+                    const parsed = parseToolCallsFromText(fullContent, requestBody?.tools)
                     if (parsed.toolCalls.length > 0) {
                         message.content = sanitizeVisibleText(parsed.content)
                         message.tool_calls = parsed.toolCalls

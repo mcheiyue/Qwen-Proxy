@@ -358,19 +358,116 @@ function escapeCDATA(s) {
 }
 
 /* ---------------- non-stream parser ---------------- */
-function parseToolCallsFromText(text) {
+function parseToolCallsFromText(text, tools = []) {
   if (!text || typeof text !== 'string') return { content: text || '', toolCalls: [] }
   const assistantResponse = extractAssistantResponseFromJSONLike(text)
   const last = findLastClosedBlock(text)
-  if (!last) return { content: assistantResponse !== null ? assistantResponse : text, toolCalls: [] }
+  if (!last) {
+    const bare = parseBareToolCallFallback(text, tools, assistantResponse)
+    if (bare.toolCalls.length > 0) return bare
+    return { content: assistantResponse !== null ? assistantResponse : text, toolCalls: [] }
+  }
   const block = text.slice(last.start, last.end)
   const calls = parseToolCallsBlock(block)
-  if (calls.length === 0) return { content: assistantResponse !== null ? assistantResponse : text, toolCalls: [] }
+  if (calls.length === 0) {
+    const bare = parseBareToolCallFallback(text, tools, assistantResponse)
+    if (bare.toolCalls.length > 0) return bare
+    return { content: assistantResponse !== null ? assistantResponse : text, toolCalls: [] }
+  }
   // If wrapped in a markdown fence, extend the strip boundary to include the
   // fence markers so visible content doesn't get a dangling ``` left over.
   const exp = expandFenceBoundary(text, last.start, last.end)
   const content = text.slice(0, exp.start).replace(/\s+$/, '')
   return { content, toolCalls: calls }
+}
+
+function parseBareToolCallFallback(text, tools = [], assistantResponse = null) {
+  if (!Array.isArray(tools) || tools.length === 0 || typeof text !== 'string') {
+    return { content: assistantResponse !== null ? assistantResponse : text || '', toolCalls: [] }
+  }
+
+  const source = assistantResponse !== null ? assistantResponse : text
+  const candidates = extractBareToolPayloadCandidates(source)
+  for (const candidate of candidates) {
+    const args = tryJsonRepair(candidate.payload)
+    if (!args || typeof args !== 'object' || Array.isArray(args)) continue
+    const tool = selectToolForArgs(tools, args, candidate)
+    if (!tool) continue
+    const name = deobfuscateToolName(tool.name)
+    const content = source.slice(0, candidate.start).replace(/\s+$/, '') + source.slice(candidate.end).replace(/^\s+/, '')
+    return {
+      content,
+      toolCalls: [{
+        id: 'call_' + cryptoRandom(),
+        type: 'function',
+        function: { name, arguments: JSON.stringify(args) }
+      }]
+    }
+  }
+
+  return { content: source, toolCalls: [] }
+}
+
+function extractBareToolPayloadCandidates(text) {
+  const candidates = []
+  const cdataRe = /<!\[CDATA\[([\s\S]*?)\]\]>/g
+  let match
+  while ((match = cdataRe.exec(text)) !== null) {
+    candidates.push({ payload: match[1], start: match.index, end: match.index + match[0].length, name: null, kind: 'cdata' })
+  }
+
+  const qnmlRe = /<([A-Za-z_][\w.-]*)\s*>\s*(\{[\s\S]*?\})\s*<\/\1>/g
+  while ((match = qnmlRe.exec(text)) !== null) {
+    candidates.push({ payload: match[2], start: match.index, end: match.index + match[0].length, name: match[1], kind: 'qnml' })
+  }
+
+  const trimmed = text.trim()
+  if (/^\{[\s\S]*\}$/.test(trimmed)) {
+    candidates.push({ payload: trimmed, start: text.indexOf(trimmed), end: text.indexOf(trimmed) + trimmed.length, name: null, kind: 'json' })
+  }
+
+  return candidates
+}
+
+function selectToolForArgs(tools, args, candidate = {}) {
+  const normalized = tools
+    .map(tool => normalizeToolDefinition(tool))
+    .filter(tool => tool.name)
+
+  if (candidate.name) {
+    const hintedName = candidate.name
+    const hinted = normalized.find(tool => tool.name === hintedName || obfuscateToolName(tool.name) === hintedName || deobfuscateToolName(hintedName) === tool.name)
+    if (hinted) return hinted
+  }
+
+  if (normalized.length === 1 && candidate.kind !== 'json') return normalized[0]
+
+  const argKeys = Object.keys(args)
+  let best = null
+  let bestScore = 0
+  for (const tool of normalized) {
+    const properties = tool.parameters && typeof tool.parameters === 'object' && tool.parameters.properties && typeof tool.parameters.properties === 'object'
+      ? Object.keys(tool.parameters.properties)
+      : []
+    const required = Array.isArray(tool.parameters?.required) ? tool.parameters.required : []
+    const propertyMatches = argKeys.filter(key => properties.includes(key)).length
+    const requiredMatches = required.filter(key => Object.prototype.hasOwnProperty.call(args, key)).length
+    const score = propertyMatches + requiredMatches * 2
+    if (score > bestScore) {
+      bestScore = score
+      best = tool
+    }
+  }
+  return bestScore > 0 ? best : null
+}
+
+function normalizeToolDefinition(tool) {
+  const fn = tool && (tool.function || tool)
+  if (!fn || typeof fn !== 'object') return { name: '', parameters: null }
+  return {
+    name: typeof fn.name === 'string' ? fn.name : '',
+    parameters: fn.parameters || fn.input_schema || null,
+  }
 }
 
 function extractAssistantResponseFromJSONLike(text) {

@@ -841,7 +841,7 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
         })
         finish_reason = 'tool_calls'
       } else if (toolcallEnabled && sanitizedFullContent) {
-        const parsed = parseToolCallsFromText(sanitizedFullContent)
+        const parsed = parseToolCallsFromText(sanitizedFullContent, requestBody?.tools)
         if (parsed.toolCalls.length > 0) {
           message.content = parsed.content
           message.tool_calls = parsed.toolCalls
@@ -1210,6 +1210,19 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         if (strippedTail) {
           emitSanitizedOutputText(sanitizeVisibleText(strippedTail))
           persistPartialResponse(true)
+        }
+
+        if (toolcallEnabled && toolCallsByIndex.size === 0 && textBuffer) {
+          const parsed = parseToolCallsFromText(textBuffer, requestBody?.tools)
+          if (parsed.toolCalls.length > 0) {
+            emitToolCalls(parsed.toolCalls.map((call, index) => ({
+              index,
+              id: call.id,
+              type: 'function',
+              function: call.function,
+            })))
+            persistPartialResponse(true)
+          }
         }
 
         const output = []
