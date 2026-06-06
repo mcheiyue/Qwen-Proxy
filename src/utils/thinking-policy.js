@@ -42,7 +42,29 @@ const applyReasoningEffortPolicy = (reasoning_effort, policy = 'ignore') => {
     return undefined
 }
 
+const resolveReasoningEffort = (reasoning_effort, reasoning) => {
+    if (typeof reasoning_effort === 'string') {
+        const trimmedEffort = reasoning_effort.trim()
+        if (trimmedEffort) return trimmedEffort
+    } else if (reasoning_effort) {
+        return reasoning_effort
+    }
+
+    if (reasoning && typeof reasoning === 'object' && !Array.isArray(reasoning)) {
+        const effort = reasoning.effort
+        if (typeof effort === 'string') {
+            const trimmedEffort = effort.trim()
+            if (trimmedEffort) return trimmedEffort
+        } else if (effort) {
+            return effort
+        }
+    }
+
+    return undefined
+}
+
 module.exports = {
     applyReasoningEffortPolicy,
     isThinkingEnabled,
+    resolveReasoningEffort,
 }

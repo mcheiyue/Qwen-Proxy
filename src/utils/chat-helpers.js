@@ -5,7 +5,7 @@ const { getLatestModels } = require('../models/models-map.js')
 const config = require('../config/index.js')
 const accountManager = require('./account.js')
 const CacheManager = require('./img-caches.js')
-const { isThinkingEnabled, applyReasoningEffortPolicy } = require('./thinking-policy.js')
+const { isThinkingEnabled, applyReasoningEffortPolicy, resolveReasoningEffort } = require('./thinking-policy.js')
 
 const MODEL_SUFFIXES = [
     '-thinking-search',
@@ -455,6 +455,7 @@ module.exports = {
     isChatType,
     isThinkingEnabled,
     applyReasoningEffortPolicy,
+    resolveReasoningEffort,
     parserModel,
     parserMessages
 }

@@ -1,5 +1,5 @@
 const { generateUUID } = require('../utils/tools.js')
-const { isChatType, isThinkingEnabled, applyReasoningEffortPolicy, parserModel, parserMessages } = require('../utils/chat-helpers.js')
+const { isChatType, isThinkingEnabled, applyReasoningEffortPolicy, resolveReasoningEffort, parserModel, parserMessages } = require('../utils/chat-helpers.js')
 const accountManager = require('../utils/account.js')
 const { logger } = require('../utils/logger')
 const config = require('../config/index.js')
@@ -74,6 +74,7 @@ const processRequestBody = async (req, res, next) => {
       enable_thinking,
       thinking_budget,
       reasoning_effort,
+      reasoning,
       size
     } = req.body
 
@@ -109,8 +110,8 @@ const processRequestBody = async (req, res, next) => {
       })
     }
 
-    const originalReasoningEffort = reasoning_effort
-    reasoning_effort = applyReasoningEffortPolicy(reasoning_effort, config.chatReasoningEffortPolicy)
+    const originalReasoningEffort = resolveReasoningEffort(reasoning_effort, reasoning)
+    reasoning_effort = applyReasoningEffortPolicy(originalReasoningEffort, config.chatReasoningEffortPolicy)
 
     if (originalReasoningEffort && originalReasoningEffort !== reasoning_effort) {
       const policy = config.chatReasoningEffortPolicy
