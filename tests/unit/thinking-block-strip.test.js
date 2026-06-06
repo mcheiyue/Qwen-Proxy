@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 
 const {
   createThinkingBlockStripper,
+  sanitizeVisibleDelta,
   sanitizeVisibleOutput,
 } = require('../../src/utils/visible-output-sanitize.js')
 
@@ -47,4 +48,26 @@ test('thinking stripper passes through normal text without thinking tags', () =>
 test('thinking stripper cooperates with visible output sanitizer', () => {
   const stripped = collect(['answer <think>hidden</think> <|DSML|broken> done'])
   assert.equal(sanitizeVisibleOutput(stripped), 'answer   done')
+})
+
+test('visible delta sanitizer preserves boundary spaces across chunks', () => {
+  const chunks = ['hello ', 'world', '\nnext line']
+  assert.equal(chunks.map(sanitizeVisibleDelta).join(''), 'hello world\nnext line')
+})
+
+test('visible delta sanitizer preserves markdown table row boundaries', () => {
+  const chunks = [
+    '| 技能 | 说明 |\n',
+    '| --- | --- |\n',
+    '| xlsx | 表格处理 |\n',
+  ]
+  assert.equal(chunks.map(sanitizeVisibleDelta).join(''), '| 技能 | 说明 |\n| --- | --- |\n| xlsx | 表格处理 |\n')
+})
+
+test('visible delta sanitizer strips protocol fragments without trimming text', () => {
+  assert.equal(sanitizeVisibleDelta('  hello <|DSML|broken> world\n'), '  hello  world\n')
+})
+
+test('visible output sanitizer still trims complete text', () => {
+  assert.equal(sanitizeVisibleOutput('  final answer  \n'), 'final answer')
 })

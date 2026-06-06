@@ -5,7 +5,7 @@ const accountManager = require('../utils/account.js')
 const config = require('../config/index.js')
 const { logger } = require('../utils/logger')
 const { createSieve, parseToolCallsFromText, resolveToolCallTools } = require('../utils/toolcall.js')
-const { createThinkingBlockStripper, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
+const { createThinkingBlockStripper, sanitizeVisibleDelta, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 
 const buildRequestLogMeta = (req, extra = null) => {
     const meta = {
@@ -26,6 +26,11 @@ const buildRequestErrorBody = (req, message, code) => ({
 const sanitizeVisibleText = (text) => {
     if (!config.sanitizeVisibleOutput) return text
     return sanitizeVisibleOutput(text)
+}
+
+const sanitizeVisibleStreamDelta = (text) => {
+    if (!config.sanitizeVisibleOutput) return text
+    return sanitizeVisibleDelta(text)
 }
 
 const requiresToolCall = (toolChoice) => {
@@ -226,16 +231,16 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                                 completionContent += pendingImageContent
                                 pendingImageMarkdownList.forEach(item => emittedImageMarkdownSet.add(item))
                                 pendingImageMarkdownList = []
-                                writeChunk({ "content": sanitizeVisibleText(pendingImageContent) })
+                            writeChunk({ "content": sanitizeVisibleStreamDelta(pendingImageContent) })
                             }
                         }
                         currentPhase = 'answer'
                         if (sieve) {
                             const out = sieve.push(content)
-                            if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(thinkingStripper.push(out.textDelta)) })
+                            if (out.textDelta) writeChunk({ "content": sanitizeVisibleStreamDelta(thinkingStripper.push(out.textDelta)) })
                             if (out.toolCallsDelta) writeToolCallDeltas(out.toolCallsDelta)
                         } else {
-                            writeChunk({ "content": sanitizeVisibleText(thinkingStripper.push(content)) })
+                            writeChunk({ "content": sanitizeVisibleStreamDelta(thinkingStripper.push(content)) })
                         }
                     }
                 } catch (error) {
@@ -251,12 +256,12 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                 // Flush any pending content held by the tool-call sieve
                 if (sieve) {
                     const out = sieve.flush()
-                    if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(thinkingStripper.push(out.textDelta)) })
+                    if (out.textDelta) writeChunk({ "content": sanitizeVisibleStreamDelta(thinkingStripper.push(out.textDelta)) })
                     if (out.toolCallsDelta) writeToolCallDeltas(out.toolCallsDelta)
                 }
 
                 const strippedTail = thinkingStripper.flush()
-                if (strippedTail) writeChunk({ "content": sanitizeVisibleText(strippedTail) })
+                if (strippedTail) writeChunk({ "content": sanitizeVisibleStreamDelta(strippedTail) })
 
                 if (sieve && !toolCallsEmitted && completionContent) {
                     const parsed = parseToolCallsFromText(completionContent, resolveToolCallTools(requestBody, req))
@@ -273,7 +278,7 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                 // Append search info for non-thinking mode
                 if ((config.outThink === false || !enable_thinking) && web_search_info && config.searchInfoMode === "text") {
                     const webSearchTable = await accountManager.generateMarkdownTable(web_search_info, "text")
-                    writeChunk({ "content": sanitizeVisibleText(`\n\n---\n${webSearchTable}`) })
+                    writeChunk({ "content": sanitizeVisibleStreamDelta(`\n\n---\n${webSearchTable}`) })
                 }
 
                 if (totalTokens.prompt_tokens === 0 && totalTokens.completion_tokens === 0) {

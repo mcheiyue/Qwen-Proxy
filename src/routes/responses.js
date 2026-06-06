@@ -11,7 +11,7 @@ const { generateUUID, isJson } = require('../utils/tools.js')
 const { createUsageObject } = require('../utils/precise-tokenizer.js')
 const { createSieve, parseToolCallsFromText, resolveToolCallTools } = require('../utils/toolcall.js')
 const { createResponseStore } = require('../utils/response-store.js')
-const { createThinkingBlockStripper, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
+const { createThinkingBlockStripper, sanitizeVisibleDelta, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 const config = require('../config/index.js')
 
 const responseStoreApi = createResponseStore({
@@ -100,6 +100,11 @@ function buildRouteErrorBody(req, message, code) {
 function sanitizeVisibleText(text) {
   if (!config.sanitizeVisibleOutput) return text
   return sanitizeVisibleOutput(text)
+}
+
+function sanitizeVisibleStreamDelta(text) {
+  if (!config.sanitizeVisibleOutput) return text
+  return sanitizeVisibleDelta(text)
 }
 
 function stringifyResponseContent(value) {
@@ -974,7 +979,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
 
     const emitOutputText = (text) => {
       if (!text) return
-      emitSanitizedOutputText(sanitizeVisibleText(thinkingStripper.push(text)))
+      emitSanitizedOutputText(sanitizeVisibleStreamDelta(thinkingStripper.push(text)))
     }
 
     const emitReasoningText = (text) => {
@@ -1208,7 +1213,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
 
         const strippedTail = thinkingStripper.flush()
         if (strippedTail) {
-          emitSanitizedOutputText(sanitizeVisibleText(strippedTail))
+        emitSanitizedOutputText(sanitizeVisibleStreamDelta(strippedTail))
           persistPartialResponse(true)
         }
 

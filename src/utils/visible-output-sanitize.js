@@ -108,6 +108,16 @@ function sanitizeVisibleOutput(text) {
   return out
 }
 
+function sanitizeVisibleDelta(text) {
+  if (typeof text !== 'string' || !text) return text || ''
+  let out = text
+  out = stripMalformedProtocol(out)
+  out = out
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+  return out
+}
+
 function isThinkingTag(tag) {
   return /^<\/?(?:think|thinking)>$/i.test(tag)
 }
@@ -177,5 +187,6 @@ function createThinkingBlockStripper() {
 
 module.exports = {
   createThinkingBlockStripper,
+  sanitizeVisibleDelta,
   sanitizeVisibleOutput,
 }
