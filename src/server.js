@@ -4,7 +4,8 @@ const crypto = require('crypto')
 const config = require('./config/index.js')
 const cors = require('cors')
 const { logger } = require('./utils/logger')
-const { initSsxmodManager } = require('./utils/ssxmod-manager')
+const { initSsxmodManager, getCookies } = require('./utils/ssxmod-manager')
+const { buildReadinessPayload } = require('./utils/readiness')
 // Single source of truth for the version string. Bumping this in the
 // root package.json automatically (a) triggers the release.yml workflow
 // because it watches paths: package.json, and (b) gets baked into the
@@ -163,6 +164,15 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json(buildHealthPayload())
+})
+
+app.get('/readyz', (req, res) => {
+  const readiness = buildReadinessPayload({
+    health: typeof accountManager.getHealthStats === 'function' ? accountManager.getHealthStats() : null,
+    cookies: getCookies(),
+    baseHealth: buildHealthPayload(),
+  })
+  res.status(readiness.statusCode).json(readiness.payload)
 })
 
 // API routes
