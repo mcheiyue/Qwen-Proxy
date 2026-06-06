@@ -9,7 +9,7 @@ const { sendChatRequest } = require('../utils/request.js')
 const { logger } = require('../utils/logger')
 const { generateUUID, isJson } = require('../utils/tools.js')
 const { createUsageObject } = require('../utils/precise-tokenizer.js')
-const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
+const { createSieve, parseToolCallsFromText, resolveToolCallTools } = require('../utils/toolcall.js')
 const { createResponseStore } = require('../utils/response-store.js')
 const { createThinkingBlockStripper, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 const config = require('../config/index.js')
@@ -763,7 +763,7 @@ async function cancelActiveResponse(req, responseId) {
   return { status: 200, response }
 }
 
-function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnabled = false) {
+function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnabled = false, req = null) {
   return new Promise((resolve, reject) => {
     const decoder = new TextDecoder('utf-8')
     let buffer = ''
@@ -841,7 +841,7 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
         })
         finish_reason = 'tool_calls'
       } else if (toolcallEnabled && sanitizedFullContent) {
-        const parsed = parseToolCallsFromText(sanitizedFullContent, requestBody?.tools)
+        const parsed = parseToolCallsFromText(sanitizedFullContent, resolveToolCallTools(requestBody, req))
         if (parsed.toolCalls.length > 0) {
           message.content = parsed.content
           message.tool_calls = parsed.toolCalls
@@ -1213,7 +1213,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         }
 
         if (toolcallEnabled && toolCallsByIndex.size === 0 && textBuffer) {
-          const parsed = parseToolCallsFromText(textBuffer, requestBody?.tools)
+            const parsed = parseToolCallsFromText(textBuffer, resolveToolCallTools(requestBody, req))
           if (parsed.toolCalls.length > 0) {
             emitToolCalls(parsed.toolCalls.map((call, index) => ({
               index,
@@ -1418,7 +1418,7 @@ async function handleResponses(req, res) {
       return
     }
 
-    const openaiResponse = await accumulateOpenAIChatResponse(responseData.response, req.body, req.toolcall_enabled)
+    const openaiResponse = await accumulateOpenAIChatResponse(responseData.response, req.body, req.toolcall_enabled, req)
     const completedResponse = attachResponseMetadata(buildResponseObject(requestedModel, openaiResponse), responseMetadata)
     completedResponse.id = responseId
     res.json(await saveResponseObject(req, completedResponse))

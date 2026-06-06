@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { parseToolCallsFromText } = require('../../src/utils/toolcall.js')
+const { parseToolCallsFromText, resolveToolCallTools } = require('../../src/utils/toolcall.js')
 
 const smokeTools = [{
   type: 'function',
@@ -93,6 +93,27 @@ test('existing DSML parser still takes precedence over fallback', () => {
     '</|DSML|tool_calls>',
   ].join('\n')
   const parsed = parseToolCallsFromText(dsml, smokeTools)
+
+  assert.equal(parsed.content, '')
+  assert.equal(parsed.toolCalls.length, 1)
+  assert.equal(parsed.toolCalls[0].function.name, 'get_smoke_status')
+  assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { target: 'gray-smoke' })
+})
+
+test('resolveToolCallTools falls back to middleware preserved tools', () => {
+  const upstreamBodyAfterMiddleware = { messages: [{ role: 'user', content: 'hi' }] }
+  const req = { toolcall_tools: smokeTools }
+
+  assert.equal(resolveToolCallTools(upstreamBodyAfterMiddleware, req), smokeTools)
+})
+
+test('fallback parses CDATA when middleware removed tools from request body', () => {
+  const upstreamBodyAfterMiddleware = { messages: [{ role: 'user', content: 'hi' }] }
+  const req = { toolcall_tools: smokeTools }
+  const parsed = parseToolCallsFromText(
+    '<![CDATA[{"target": "gray-smoke"}]]>',
+    resolveToolCallTools(upstreamBodyAfterMiddleware, req)
+  )
 
   assert.equal(parsed.content, '')
   assert.equal(parsed.toolCalls.length, 1)

@@ -381,6 +381,12 @@ function parseToolCallsFromText(text, tools = []) {
   return { content, toolCalls: calls }
 }
 
+function resolveToolCallTools(requestBody = null, req = null) {
+  if (Array.isArray(requestBody?.tools) && requestBody.tools.length > 0) return requestBody.tools
+  if (Array.isArray(req?.toolcall_tools) && req.toolcall_tools.length > 0) return req.toolcall_tools
+  return []
+}
+
 function parseBareToolCallFallback(text, tools = [], assistantResponse = null) {
   if (!Array.isArray(tools) || tools.length === 0 || typeof text !== 'string') {
     return { content: assistantResponse !== null ? assistantResponse : text || '', toolCalls: [] }
@@ -834,6 +840,7 @@ module.exports = {
   serializeAssistantToolCalls,
   serializeToolResult,
   parseToolCallsFromText,
+  resolveToolCallTools,
   createSieve,
   obfuscateToolName,
   deobfuscateToolName,

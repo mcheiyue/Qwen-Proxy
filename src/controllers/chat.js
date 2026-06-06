@@ -4,7 +4,7 @@ const { sendChatRequest } = require('../utils/request.js')
 const accountManager = require('../utils/account.js')
 const config = require('../config/index.js')
 const { logger } = require('../utils/logger')
-const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
+const { createSieve, parseToolCallsFromText, resolveToolCallTools } = require('../utils/toolcall.js')
 const { createThinkingBlockStripper, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 
 const buildRequestLogMeta = (req, extra = null) => {
@@ -259,7 +259,7 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                 if (strippedTail) writeChunk({ "content": sanitizeVisibleText(strippedTail) })
 
                 if (sieve && !toolCallsEmitted && completionContent) {
-                    const parsed = parseToolCallsFromText(completionContent, requestBody?.tools)
+                    const parsed = parseToolCallsFromText(completionContent, resolveToolCallTools(requestBody, req))
                     if (parsed.toolCalls.length > 0) {
                         writeToolCallDeltas(parsed.toolCalls.map((call, index) => ({
                             index,
@@ -523,7 +523,7 @@ const handleNonStreamResponse = async (req, res, response, enable_thinking, enab
 
             let finishReason = "stop"
                 if (toolcallEnabled && fullContent) {
-                    const parsed = parseToolCallsFromText(fullContent, requestBody?.tools)
+                    const parsed = parseToolCallsFromText(fullContent, resolveToolCallTools(requestBody, req))
                     if (parsed.toolCalls.length > 0) {
                         message.content = sanitizeVisibleText(parsed.content)
                         message.tool_calls = parsed.toolCalls
