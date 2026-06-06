@@ -11,7 +11,7 @@ const { generateUUID, isJson } = require('../utils/tools.js')
 const { createUsageObject } = require('../utils/precise-tokenizer.js')
 const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
 const { createResponseStore } = require('../utils/response-store.js')
-const { sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
+const { createThinkingBlockStripper, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 const config = require('../config/index.js')
 
 const responseStoreApi = createResponseStore({
@@ -819,7 +819,8 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
     })
 
     response.on('end', async () => {
-      const message = { role: 'assistant', content: fullContent }
+      const sanitizedFullContent = sanitizeVisibleText(fullContent)
+      const message = { role: 'assistant', content: sanitizedFullContent }
       if (reasoningContent) {
         message.reasoning_content = reasoningContent
       }
@@ -839,8 +840,8 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
           }
         })
         finish_reason = 'tool_calls'
-      } else if (toolcallEnabled && fullContent) {
-        const parsed = parseToolCallsFromText(fullContent)
+      } else if (toolcallEnabled && sanitizedFullContent) {
+        const parsed = parseToolCallsFromText(sanitizedFullContent)
         if (parsed.toolCalls.length > 0) {
           message.content = parsed.content
           message.tool_calls = parsed.toolCalls
@@ -880,6 +881,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
     let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
     const toolCallsByIndex = new Map()
     const sieve = toolcallEnabled ? createSieve() : null
+    const thinkingStripper = createThinkingBlockStripper()
     const outputItems = []
     let messageItem = null
     let messageContentPart = null
@@ -953,9 +955,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
       return messageContentPart
     }
 
-    const emitOutputText = (text) => {
-      if (!text) return
-      const sanitized = sanitizeVisibleText(text)
+    const emitSanitizedOutputText = (sanitized) => {
       if (!sanitized) return
       const item = ensureMessageItem()
       const part = ensureMessageContentPart()
@@ -970,6 +970,11 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
         content_index: item.content.indexOf(part),
         delta: sanitized,
       })
+    }
+
+    const emitOutputText = (text) => {
+      if (!text) return
+      emitSanitizedOutputText(sanitizeVisibleText(thinkingStripper.push(text)))
     }
 
     const emitReasoningText = (text) => {
@@ -1199,6 +1204,12 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
           if (out.textDelta) emitOutputText(out.textDelta)
           if (out.toolCallsDelta) emitToolCalls(out.toolCallsDelta)
           if (out.textDelta || out.toolCallsDelta) persistPartialResponse(true)
+        }
+
+        const strippedTail = thinkingStripper.flush()
+        if (strippedTail) {
+          emitSanitizedOutputText(sanitizeVisibleText(strippedTail))
+          persistPartialResponse(true)
         }
 
         const output = []

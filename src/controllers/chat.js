@@ -5,7 +5,7 @@ const accountManager = require('../utils/account.js')
 const config = require('../config/index.js')
 const { logger } = require('../utils/logger')
 const { createSieve, parseToolCallsFromText } = require('../utils/toolcall.js')
-const { sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
+const { createThinkingBlockStripper, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 
 const buildRequestLogMeta = (req, extra = null) => {
     const meta = {
@@ -93,6 +93,7 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
         // Tool-call sieve. Only created when the request was gated as
         // tool-call enabled by the middleware.
         const sieve = toolcallEnabled ? createSieve() : null
+        const thinkingStripper = createThinkingBlockStripper()
         let toolCallsEmitted = false
 
         let totalTokens = {
@@ -231,10 +232,10 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                         currentPhase = 'answer'
                         if (sieve) {
                             const out = sieve.push(content)
-                            if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(out.textDelta) })
+                            if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(thinkingStripper.push(out.textDelta)) })
                             if (out.toolCallsDelta) writeToolCallDeltas(out.toolCallsDelta)
                         } else {
-                            writeChunk({ "content": sanitizeVisibleText(content) })
+                            writeChunk({ "content": sanitizeVisibleText(thinkingStripper.push(content)) })
                         }
                     }
                 } catch (error) {
@@ -250,9 +251,12 @@ const handleStreamResponse = async (req, res, response, enable_thinking, enable_
                 // Flush any pending content held by the tool-call sieve
                 if (sieve) {
                     const out = sieve.flush()
-                    if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(out.textDelta) })
+                    if (out.textDelta) writeChunk({ "content": sanitizeVisibleText(thinkingStripper.push(out.textDelta)) })
                     if (out.toolCallsDelta) writeToolCallDeltas(out.toolCallsDelta)
                 }
+
+                const strippedTail = thinkingStripper.flush()
+                if (strippedTail) writeChunk({ "content": sanitizeVisibleText(strippedTail) })
 
                 // Append search info for non-thinking mode
                 if ((config.outThink === false || !enable_thinking) && web_search_info && config.searchInfoMode === "text") {

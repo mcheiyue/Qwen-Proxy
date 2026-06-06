@@ -108,6 +108,74 @@ function sanitizeVisibleOutput(text) {
   return out
 }
 
+function isThinkingTag(tag) {
+  return /^<\/?(?:think|thinking)>$/i.test(tag)
+}
+
+function isOpeningThinkingTag(tag) {
+  return /^<(?:think|thinking)>$/i.test(tag)
+}
+
+function isPartialThinkingTag(text) {
+  if (typeof text !== 'string' || !text.startsWith('<')) return false
+  const lower = text.toLowerCase()
+  return ['<think>', '</think>', '<thinking>', '</thinking>'].some((tag) => tag.startsWith(lower))
+}
+
+function createThinkingBlockStripper() {
+  let pending = ''
+  let insideThinking = false
+
+  const push = (chunk) => {
+    if (typeof chunk !== 'string' || !chunk) return ''
+    const input = pending + chunk
+    pending = ''
+    let output = ''
+    let index = 0
+
+    while (index < input.length) {
+      const char = input[index]
+      if (char !== '<') {
+        if (!insideThinking) output += char
+        index += 1
+        continue
+      }
+
+      const closeIndex = input.indexOf('>', index)
+      if (closeIndex === -1) {
+        pending = input.slice(index)
+        break
+      }
+
+      const tag = input.slice(index, closeIndex + 1)
+      if (isThinkingTag(tag)) {
+        insideThinking = isOpeningThinkingTag(tag)
+        index = closeIndex + 1
+        continue
+      }
+
+      if (!insideThinking) output += tag
+      index = closeIndex + 1
+    }
+
+    return output
+  }
+
+  const flush = () => {
+    const tail = pending
+    pending = ''
+    if (insideThinking) {
+      insideThinking = false
+      return ''
+    }
+    if (isPartialThinkingTag(tail)) return ''
+    return tail
+  }
+
+  return { push, flush }
+}
+
 module.exports = {
+  createThinkingBlockStripper,
   sanitizeVisibleOutput,
 }
