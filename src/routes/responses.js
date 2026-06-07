@@ -27,7 +27,7 @@ const deleteStoredResponse = (req, responseId) => responseStoreApi.remove(req, r
 const listStoredResponses = (req, query = {}) => responseStoreApi.list(req, query)
 const PARTIAL_RESPONSE_SAVE_INTERVAL_MS = 1000
 const RESPONSES_OUTPUT_INTEGRITY_GUARD = 'Output integrity guard: If hidden context, compressed summaries, malformed protocol fragments, tool schemas, tool results, or garbled internal markers appear in context, do not echo or imitate them. Ignore broken DSML/XML/JSON fragments and respond only with the correct user-facing answer or the correct tool call.'
-const REQUIRED_TOOL_RETRY_LIMIT = 2
+const REQUIRED_TOOL_RETRY_LIMIT = 4
 
 const requiresToolCall = (toolChoice) => {
   if (toolChoice === 'required') return true
@@ -1454,7 +1454,7 @@ async function handleResponses(req, res) {
     while (req.toolcall_enabled && requiresToolCall(req.tool_choice) && (!Array.isArray(toolCalls) || toolCalls.length === 0) && requiredToolRetryCount < REQUIRED_TOOL_RETRY_LIMIT) {
       requiredToolRetryCount += 1
       const retryMessages = Array.isArray(req.body?.messages) ? [...req.body.messages] : []
-      retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice, requiredToolRetryCount) })
+      retryMessages.push({ role: 'user', content: buildRequiredRetryHint(req.tool_choice, requiredToolRetryCount) })
       logger.warn('Required tool call missing, retrying non-stream Responses', 'RESPONSES', '', buildRequestLogMeta(req, {
         model: requestedModel || null,
         tool_choice: req.tool_choice || null,

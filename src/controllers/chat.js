@@ -33,7 +33,7 @@ const sanitizeVisibleStreamDelta = (text) => {
     return sanitizeVisibleDelta(text)
 }
 
-const REQUIRED_TOOL_RETRY_LIMIT = 2
+const REQUIRED_TOOL_RETRY_LIMIT = 4
 
 const requiresToolCall = (toolChoice) => {
     if (toolChoice === 'required') return true
@@ -561,7 +561,7 @@ const handleNonStreamResponse = async (req, res, response, enable_thinking, enab
         while (toolcallEnabled && requiresToolCall(req.tool_choice) && (!responseData.tool_calls || responseData.tool_calls.length === 0) && requiredToolRetryCount < REQUIRED_TOOL_RETRY_LIMIT) {
             requiredToolRetryCount += 1
             const retryMessages = Array.isArray(requestBody?.messages) ? [...requestBody.messages] : []
-            retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice, requiredToolRetryCount) })
+            retryMessages.push({ role: 'user', content: buildRequiredRetryHint(req.tool_choice, requiredToolRetryCount) })
             logger.warn('Required tool call missing, retrying non-stream chat', 'CHAT', '', buildRequestLogMeta(req, {
                 model: model || null,
                 tool_choice: req.tool_choice || null,
