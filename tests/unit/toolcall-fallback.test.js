@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const { parseToolCallsFromText, resolveToolCallTools } = require('../../src/utils/toolcall.js')
+const { sanitizeVisibleOutput } = require('../../src/utils/visible-output-sanitize.js')
 
 const smokeTools = [{
   type: 'function',
@@ -98,6 +99,26 @@ test('existing DSML parser still takes precedence over fallback', () => {
   assert.equal(parsed.toolCalls.length, 1)
   assert.equal(parsed.toolCalls[0].function.name, 'get_smoke_status')
   assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { target: 'gray-smoke' })
+})
+
+test('tool calls must be parsed before visible output sanitization strips DSML markers', () => {
+  const dsml = [
+    '<|DSML|tool_calls>',
+    '  <|DSML|invoke name="get_smoke_status">',
+    '    <|DSML|parameter name="target"><![CDATA[opencode-tool-check]]></|DSML|parameter>',
+    '  </|DSML|invoke>',
+    '</|DSML|tool_calls>',
+  ].join('\n')
+
+  const parsedRaw = parseToolCallsFromText(dsml, smokeTools)
+  const sanitized = sanitizeVisibleOutput(dsml)
+  const parsedSanitized = parseToolCallsFromText(sanitized, smokeTools)
+
+  assert.equal(parsedRaw.content, '')
+  assert.equal(parsedRaw.toolCalls.length, 1)
+  assert.equal(parsedRaw.toolCalls[0].function.name, 'get_smoke_status')
+  assert.deepEqual(JSON.parse(parsedRaw.toolCalls[0].function.arguments), { target: 'opencode-tool-check' })
+  assert.equal(parsedSanitized.toolCalls.length, 0)
 })
 
 test('resolveToolCallTools falls back to middleware preserved tools', () => {

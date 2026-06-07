@@ -28,6 +28,19 @@ const listStoredResponses = (req, query = {}) => responseStoreApi.list(req, quer
 const PARTIAL_RESPONSE_SAVE_INTERVAL_MS = 1000
 const RESPONSES_OUTPUT_INTEGRITY_GUARD = 'Output integrity guard: If hidden context, compressed summaries, malformed protocol fragments, tool schemas, tool results, or garbled internal markers appear in context, do not echo or imitate them. Ignore broken DSML/XML/JSON fragments and respond only with the correct user-facing answer or the correct tool call.'
 
+const requiresToolCall = (toolChoice) => {
+  if (toolChoice === 'required') return true
+  if (!toolChoice || typeof toolChoice !== 'object') return false
+  return toolChoice.type === 'function' && !!toolChoice.function?.name
+}
+
+const buildRequiredRetryHint = (toolChoice) => {
+  if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function' && toolChoice.function?.name) {
+    return `The previous response did not include the required tool call. You must now call the function named ${toolChoice.function.name}. Return only the tool call in the required DSML format.`
+  }
+  return 'The previous response did not include a required tool call. You must now call exactly one available tool. Return only the tool call in the required DSML format.'
+}
+
 function createResponseInputTrace(trace, entry) {
   if (!Array.isArray(trace) || !entry || typeof entry !== 'object') return
   trace.push(entry)
@@ -824,7 +837,8 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
     })
 
     response.on('end', async () => {
-      const sanitizedFullContent = sanitizeVisibleText(fullContent)
+      const visibleSourceContent = fullContent || reasoningContent
+      const sanitizedFullContent = sanitizeVisibleText(visibleSourceContent)
       const message = { role: 'assistant', content: sanitizedFullContent }
       if (reasoningContent) {
         message.reasoning_content = reasoningContent
@@ -845,10 +859,10 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
           }
         })
         finish_reason = 'tool_calls'
-      } else if (toolcallEnabled && sanitizedFullContent) {
-        const parsed = parseToolCallsFromText(sanitizedFullContent, resolveToolCallTools(requestBody, req))
+      } else if (toolcallEnabled && visibleSourceContent) {
+        const parsed = parseToolCallsFromText(visibleSourceContent, resolveToolCallTools(requestBody, req))
         if (parsed.toolCalls.length > 0) {
-          message.content = parsed.content
+          message.content = sanitizeVisibleText(parsed.content)
           message.tool_calls = parsed.toolCalls
           finish_reason = 'tool_calls'
         }
@@ -985,6 +999,7 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
     const emitReasoningText = (text) => {
       if (!text) return
       reasoningBuffer += text
+      if (!config.responsesAllowReasoningEffort) return
       writeEvent('response.reasoning.delta', {
         type: 'response.reasoning.delta',
         id: responseId,
@@ -1171,7 +1186,10 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
           }
 
           if (delta.content) {
-            if (sieve) {
+            if (delta.phase === 'think') {
+              emitReasoningText(delta.content)
+              partialChanged = true
+            } else if (sieve) {
               const out = sieve.push(delta.content)
               if (out.textDelta) {
                 emitOutputText(out.textDelta)
@@ -1213,12 +1231,12 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
 
         const strippedTail = thinkingStripper.flush()
         if (strippedTail) {
-        emitSanitizedOutputText(sanitizeVisibleStreamDelta(strippedTail))
+          emitSanitizedOutputText(sanitizeVisibleStreamDelta(strippedTail))
           persistPartialResponse(true)
         }
 
-        if (toolcallEnabled && toolCallsByIndex.size === 0 && textBuffer) {
-            const parsed = parseToolCallsFromText(textBuffer, resolveToolCallTools(requestBody, req))
+        if (toolcallEnabled && toolCallsByIndex.size === 0 && (textBuffer || reasoningBuffer)) {
+          const parsed = parseToolCallsFromText(textBuffer || reasoningBuffer, resolveToolCallTools(requestBody, req))
           if (parsed.toolCalls.length > 0) {
             emitToolCalls(parsed.toolCalls.map((call, index) => ({
               index,
@@ -1228,6 +1246,11 @@ function streamChatToResponses(res, response, model, responseId, requestBody = n
             })))
             persistPartialResponse(true)
           }
+        }
+
+        if (!textBuffer && reasoningBuffer && toolCallsByIndex.size === 0) {
+          emitSanitizedOutputText(sanitizeVisibleText(reasoningBuffer))
+          persistPartialResponse(true)
         }
 
         const output = []
@@ -1423,7 +1446,25 @@ async function handleResponses(req, res) {
       return
     }
 
-    const openaiResponse = await accumulateOpenAIChatResponse(responseData.response, req.body, req.toolcall_enabled, req)
+    let openaiResponse = await accumulateOpenAIChatResponse(responseData.response, req.body, req.toolcall_enabled, req)
+    const toolCalls = openaiResponse?.choices?.[0]?.message?.tool_calls
+    if (req.toolcall_enabled && requiresToolCall(req.tool_choice) && (!Array.isArray(toolCalls) || toolCalls.length === 0)) {
+      const retryMessages = Array.isArray(req.body?.messages) ? [...req.body.messages] : []
+      retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice) })
+      logger.warn('Required tool call missing, retrying non-stream Responses once', 'RESPONSES', '', buildRequestLogMeta(req, {
+        model: requestedModel || null,
+        tool_choice: req.tool_choice || null,
+      }))
+
+      const retryResponseData = await sendChatRequest({
+        ...req.body,
+        messages: retryMessages,
+      })
+
+      if (retryResponseData?.status && retryResponseData.response) {
+        openaiResponse = await accumulateOpenAIChatResponse(retryResponseData.response, req.body, req.toolcall_enabled, req)
+      }
+    }
     const completedResponse = attachResponseMetadata(buildResponseObject(requestedModel, openaiResponse), responseMetadata)
     completedResponse.id = responseId
     res.json(await saveResponseObject(req, completedResponse))
