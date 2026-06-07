@@ -21,6 +21,10 @@ const CLI_MODEL_ALIASES = {
     'coder-model': () => [config.cliCoderModel, 'qwen3-coder-plus', 'qwen3-coder-flash', config.defaultModel],
 }
 
+const EMPTY_UPSTREAM_MODEL_ALIASES = {
+    'qwen3.6-max': 'qwen3.7-plus',
+}
+
 const DATA_URI_REGEX = /^data:(.+);base64,(.*)$/i
 const HTTP_URL_REGEX = /^https?:\/\//i
 
@@ -220,6 +224,10 @@ const parserModel = async (model) => {
 
     try {
         const { baseModel } = splitModelSuffix(model)
+        const aliasedBaseModel = EMPTY_UPSTREAM_MODEL_ALIASES[String(baseModel || '').trim().toLowerCase()]
+        if (aliasedBaseModel) {
+            return aliasedBaseModel
+        }
         const latestModels = await getLatestModels()
         const cliAliasModel = resolveCliAliasModel(latestModels, baseModel)
         if (cliAliasModel) {

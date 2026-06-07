@@ -2,6 +2,7 @@
 
 const THINKING_PREFIX_PATTERNS = [
   /^(?:thinking process|reasoning process|internal reasoning)\s*:\s*/i,
+  /^here(?:'s| is)\s+(?:a\s+)?(?:thinking|reasoning|thought)\s+process\s*:\s*/i,
   /^(?:thinking|thought process)\s*[:：]\s*/i,
   /^(?:let'?s think step by step|let us think step by step)\s*[:：-]?\s*/i,
   /^(?:思考过程|思考|推理过程)\s*[:：]\s*/,
@@ -10,7 +11,7 @@ const THINKING_PREFIX_PATTERNS = [
 
 const ENUMERATED_THINKING_HEADER_PATTERN = /^(?:thinking process|reasoning process)\s*:\s*\n+/i
 const ANALYZE_REQUEST_PATTERN = /^\s*\d+\.\s*\*\*analyze the request\*\*\s*:/i
-const ANSWER_MARKER_PATTERN = /(?:^|\n)\s*(?:final answer|answer|最终答案|回答)\s*[:：]\s*/i
+const ANSWER_MARKER_PATTERN = /(?:^|\n)\s*(?:final answer|answer|最终答案|回答|一句话介绍)\s*[:：]\s*/i
 const META_ANALYSIS_PATTERNS = [
   /^\s*(?:the user wants me to|the user asked me to|the user is asking me to)\b[\s\S]*?(?=\n\s*(?:i am|i'm|我是|the safest approach is|最稳妥的做法是)|$)/i,
   /^\s*(?:用户设定了我的身份为|用户将我的身份设定为|用户要求我|用户希望我|用户现在要我)[\s\S]*?(?=\n\s*(?:我是|我会|最稳妥的做法是)|$)/,

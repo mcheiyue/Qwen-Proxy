@@ -71,3 +71,13 @@ test('visible delta sanitizer strips protocol fragments without trimming text', 
 test('visible output sanitizer still trims complete text', () => {
   assert.equal(sanitizeVisibleOutput('  final answer  \n'), 'final answer')
 })
+
+test('visible output sanitizer removes prose thinking preface before answer marker', () => {
+  const text = [
+    "Here's a thinking process:",
+    '1. Analyze the request: user asks for an introduction.',
+    '一句话介绍：我是 OpenCode，专注于高效协助代码生成、优化与调试。',
+  ].join('\n')
+
+  assert.equal(sanitizeVisibleOutput(text), '我是 OpenCode，专注于高效协助代码生成、优化与调试。')
+})
