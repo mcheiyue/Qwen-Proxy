@@ -4,7 +4,7 @@ const { sendChatRequest } = require('../utils/request.js')
 const accountManager = require('../utils/account.js')
 const config = require('../config/index.js')
 const { logger } = require('../utils/logger')
-const { createSieve, parseToolCallsFromText, resolveToolCallTools } = require('../utils/toolcall.js')
+const { createSieve, parseToolCallsFromText, parseToolCallsFromTextSources, resolveToolCallTools } = require('../utils/toolcall.js')
 const { createThinkingBlockStripper, sanitizeVisibleDelta, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 
 const buildRequestLogMeta = (req, extra = null) => {
@@ -33,17 +33,20 @@ const sanitizeVisibleStreamDelta = (text) => {
     return sanitizeVisibleDelta(text)
 }
 
+const REQUIRED_TOOL_RETRY_LIMIT = 2
+
 const requiresToolCall = (toolChoice) => {
     if (toolChoice === 'required') return true
     if (!toolChoice || typeof toolChoice !== 'object') return false
     return toolChoice.type === 'function' && !!toolChoice.function?.name
 }
 
-const buildRequiredRetryHint = (toolChoice) => {
+const buildRequiredRetryHint = (toolChoice, attempt = 1) => {
+    const prefix = `Required tool call retry ${attempt}: the previous response was invalid because it did not contain a machine-readable function call.`
     if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function' && toolChoice.function?.name) {
-        return `The previous response did not include the required tool call. You must now call the function named ${toolChoice.function.name}. Return only the tool call in the required DSML format.`
+        return `${prefix} You must now call the function named ${toolChoice.function.name}. Return only the tool call in the required DSML format; do not answer in prose.`
     }
-    return 'The previous response did not include a required tool call. You must now call exactly one available tool. Return only the tool call in the required DSML format.'
+    return `${prefix} You must now call exactly one available tool. Return only the tool call in the required DSML format; do not answer in prose.`
 }
 
 /**
@@ -527,8 +530,8 @@ const handleNonStreamResponse = async (req, res, response, enable_thinking, enab
             }
 
             let finishReason = "stop"
-                if (toolcallEnabled && fullContent) {
-                    const parsed = parseToolCallsFromText(fullContent, resolveToolCallTools(requestBody, req))
+                if (toolcallEnabled && (fullContent || reasoningContent)) {
+                    const parsed = parseToolCallsFromTextSources([fullContent, reasoningContent], resolveToolCallTools(requestBody, req))
                     if (parsed.toolCalls.length > 0) {
                         message.content = sanitizeVisibleText(parsed.content)
                         message.tool_calls = parsed.toolCalls
@@ -554,21 +557,28 @@ const handleNonStreamResponse = async (req, res, response, enable_thinking, enab
 
         let responseData = await consumeUpstreamResponse(response)
 
-        if (toolcallEnabled && requiresToolCall(req.tool_choice) && (!responseData.tool_calls || responseData.tool_calls.length === 0)) {
+        let requiredToolRetryCount = 0
+        while (toolcallEnabled && requiresToolCall(req.tool_choice) && (!responseData.tool_calls || responseData.tool_calls.length === 0) && requiredToolRetryCount < REQUIRED_TOOL_RETRY_LIMIT) {
+            requiredToolRetryCount += 1
             const retryMessages = Array.isArray(requestBody?.messages) ? [...requestBody.messages] : []
-            retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice) })
-            logger.warn('Required tool call missing, retrying non-stream chat once', 'CHAT', '', buildRequestLogMeta(req, {
+            retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice, requiredToolRetryCount) })
+            logger.warn('Required tool call missing, retrying non-stream chat', 'CHAT', '', buildRequestLogMeta(req, {
                 model: model || null,
-                tool_choice: req.tool_choice || null
+                tool_choice: req.tool_choice || null,
+                retry_attempt: requiredToolRetryCount,
+                retry_limit: REQUIRED_TOOL_RETRY_LIMIT
             }))
 
-            const retryResponseData = await sendChatRequest({
+            const retryBody = {
                 ...req.body,
                 messages: retryMessages
-            })
+            }
+            const retryResponseData = await sendChatRequest(retryBody)
 
             if (retryResponseData?.status && retryResponseData.response) {
                 responseData = await consumeUpstreamResponse(retryResponseData.response)
+            } else {
+                break
             }
         }
 
