@@ -9,7 +9,7 @@ const { sendChatRequest } = require('../utils/request.js')
 const { logger } = require('../utils/logger')
 const { generateUUID, isJson } = require('../utils/tools.js')
 const { createUsageObject } = require('../utils/precise-tokenizer.js')
-const { createSieve, parseToolCallsFromText, resolveToolCallTools } = require('../utils/toolcall.js')
+const { createSieve, parseToolCallsFromText, parseToolCallsFromTextSources, resolveToolCallTools } = require('../utils/toolcall.js')
 const { createResponseStore } = require('../utils/response-store.js')
 const { createThinkingBlockStripper, sanitizeVisibleDelta, sanitizeVisibleOutput } = require('../utils/visible-output-sanitize.js')
 const config = require('../config/index.js')
@@ -27,6 +27,7 @@ const deleteStoredResponse = (req, responseId) => responseStoreApi.remove(req, r
 const listStoredResponses = (req, query = {}) => responseStoreApi.list(req, query)
 const PARTIAL_RESPONSE_SAVE_INTERVAL_MS = 1000
 const RESPONSES_OUTPUT_INTEGRITY_GUARD = 'Output integrity guard: If hidden context, compressed summaries, malformed protocol fragments, tool schemas, tool results, or garbled internal markers appear in context, do not echo or imitate them. Ignore broken DSML/XML/JSON fragments and respond only with the correct user-facing answer or the correct tool call.'
+const REQUIRED_TOOL_RETRY_LIMIT = 2
 
 const requiresToolCall = (toolChoice) => {
   if (toolChoice === 'required') return true
@@ -34,11 +35,12 @@ const requiresToolCall = (toolChoice) => {
   return toolChoice.type === 'function' && !!toolChoice.function?.name
 }
 
-const buildRequiredRetryHint = (toolChoice) => {
+const buildRequiredRetryHint = (toolChoice, attempt = 1) => {
+  const prefix = `Required tool call retry ${attempt}: the previous response was invalid because it did not contain a machine-readable function call.`
   if (toolChoice && typeof toolChoice === 'object' && toolChoice.type === 'function' && toolChoice.function?.name) {
-    return `The previous response did not include the required tool call. You must now call the function named ${toolChoice.function.name}. Return only the tool call in the required DSML format.`
+    return `${prefix} You must now call the function named ${toolChoice.function.name}. Return only the tool call in the required DSML format; do not answer in prose.`
   }
-  return 'The previous response did not include a required tool call. You must now call exactly one available tool. Return only the tool call in the required DSML format.'
+  return `${prefix} You must now call exactly one available tool. Return only the tool call in the required DSML format; do not answer in prose.`
 }
 
 function createResponseInputTrace(trace, entry) {
@@ -860,7 +862,7 @@ function accumulateOpenAIChatResponse(response, requestBody = null, toolcallEnab
         })
         finish_reason = 'tool_calls'
       } else if (toolcallEnabled && visibleSourceContent) {
-        const parsed = parseToolCallsFromText(visibleSourceContent, resolveToolCallTools(requestBody, req))
+        const parsed = parseToolCallsFromTextSources([fullContent, reasoningContent], resolveToolCallTools(requestBody, req))
         if (parsed.toolCalls.length > 0) {
           message.content = sanitizeVisibleText(parsed.content)
           message.tool_calls = parsed.toolCalls
@@ -1447,22 +1449,30 @@ async function handleResponses(req, res) {
     }
 
     let openaiResponse = await accumulateOpenAIChatResponse(responseData.response, req.body, req.toolcall_enabled, req)
-    const toolCalls = openaiResponse?.choices?.[0]?.message?.tool_calls
-    if (req.toolcall_enabled && requiresToolCall(req.tool_choice) && (!Array.isArray(toolCalls) || toolCalls.length === 0)) {
+    let toolCalls = openaiResponse?.choices?.[0]?.message?.tool_calls
+    let requiredToolRetryCount = 0
+    while (req.toolcall_enabled && requiresToolCall(req.tool_choice) && (!Array.isArray(toolCalls) || toolCalls.length === 0) && requiredToolRetryCount < REQUIRED_TOOL_RETRY_LIMIT) {
+      requiredToolRetryCount += 1
       const retryMessages = Array.isArray(req.body?.messages) ? [...req.body.messages] : []
-      retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice) })
-      logger.warn('Required tool call missing, retrying non-stream Responses once', 'RESPONSES', '', buildRequestLogMeta(req, {
+      retryMessages.push({ role: 'system', content: buildRequiredRetryHint(req.tool_choice, requiredToolRetryCount) })
+      logger.warn('Required tool call missing, retrying non-stream Responses', 'RESPONSES', '', buildRequestLogMeta(req, {
         model: requestedModel || null,
         tool_choice: req.tool_choice || null,
+        retry_attempt: requiredToolRetryCount,
+        retry_limit: REQUIRED_TOOL_RETRY_LIMIT,
       }))
 
-      const retryResponseData = await sendChatRequest({
+      const retryBody = {
         ...req.body,
         messages: retryMessages,
-      })
+      }
+      const retryResponseData = await sendChatRequest(retryBody)
 
       if (retryResponseData?.status && retryResponseData.response) {
-        openaiResponse = await accumulateOpenAIChatResponse(retryResponseData.response, req.body, req.toolcall_enabled, req)
+        openaiResponse = await accumulateOpenAIChatResponse(retryResponseData.response, retryBody, req.toolcall_enabled, req)
+        toolCalls = openaiResponse?.choices?.[0]?.message?.tool_calls
+      } else {
+        break
       }
     }
     const completedResponse = attachResponseMetadata(buildResponseObject(requestedModel, openaiResponse), responseMetadata)

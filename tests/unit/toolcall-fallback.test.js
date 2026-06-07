@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { parseToolCallsFromText, resolveToolCallTools } = require('../../src/utils/toolcall.js')
+const { parseToolCallsFromText, parseToolCallsFromTextSources, resolveToolCallTools } = require('../../src/utils/toolcall.js')
 const { sanitizeVisibleOutput } = require('../../src/utils/visible-output-sanitize.js')
 
 const smokeTools = [{
@@ -140,4 +140,22 @@ test('fallback parses CDATA when middleware removed tools from request body', ()
   assert.equal(parsed.toolCalls.length, 1)
   assert.equal(parsed.toolCalls[0].function.name, 'get_smoke_status')
   assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { target: 'gray-smoke' })
+})
+
+test('fallback scans reasoning source when visible prose has no tool call', () => {
+  const visible = 'I will call the required tool now.'
+  const reasoning = [
+    'Need to satisfy tool_choice=required.',
+    '<|DSML|tool_calls>',
+    '  <|DSML|invoke name="get_smoke_status">',
+    '    <|DSML|parameter name="target"><![CDATA[opencode-tool-check]]></|DSML|parameter>',
+    '  </|DSML|invoke>',
+    '</|DSML|tool_calls>',
+  ].join('\n')
+
+  const parsed = parseToolCallsFromTextSources([visible, reasoning], smokeTools)
+
+  assert.equal(parsed.toolCalls.length, 1)
+  assert.equal(parsed.toolCalls[0].function.name, 'get_smoke_status')
+  assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { target: 'opencode-tool-check' })
 })
