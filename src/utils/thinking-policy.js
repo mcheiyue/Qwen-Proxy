@@ -9,6 +9,17 @@ const isThinkingEnabled = (model, enable_thinking, thinking_budget, reasoning_ef
         output_schema: 'phase',
         thinking_enabled: false,
         thinking_budget: 81920,
+        research_mode: 'normal',
+        auto_thinking: false,
+        thinking_mode: 'Auto',
+        thinking_format: 'summary',
+        auto_search: false,
+        code_interpreter: false,
+        plugins_enabled: false,
+        function_calling: false,
+        enable_tools: false,
+        enable_function_call: false,
+        tool_choice: 'none',
     }
 
     if (!model) return thinking_config
@@ -18,6 +29,7 @@ const isThinkingEnabled = (model, enable_thinking, thinking_budget, reasoning_ef
 
     if (model.includes('-thinking') || enable_thinking === true || enable_thinking === 'true' || hasReasoningEffort) {
         thinking_config.thinking_enabled = true
+        thinking_config.auto_thinking = true
     }
 
     if (thinking_budget && !isNaN(Number(thinking_budget)) && Number(thinking_budget) > 0) {

@@ -5,6 +5,7 @@ const { logger } = require('./logger')
 const { getSsxmodItna, getSsxmodItna2 } = require('./ssxmod-manager')
 const { getProxyAgent, getChatBaseUrl, buildAgentForUrl, getProxyHost } = require('./proxy-helper')
 const { buildQwenBrowserHeaders } = require('./upstream-headers.js')
+const { generateUUID } = require('./tools.js')
 
 // Errors that look like the proxy is dead (TCP-level / DNS / handshake).
 // Anything in this set on a proxied request triggers proxy failover.
@@ -18,6 +19,60 @@ function isProxyShapedError(err) {
     if (NETWORK_ERROR_CODES.has(err.code)) return true
     const msg = String(err.message || '')
     return /timeout|ECONN|socket|ENETUNREACH|tunneling/.test(msg)
+}
+
+function buildWebCompletionMessage(message, body, timestampSeconds) {
+    const featureConfig = {
+        thinking_enabled: true,
+        output_schema: 'phase',
+        research_mode: 'normal',
+        auto_thinking: true,
+        thinking_mode: 'Auto',
+        thinking_format: 'summary',
+        auto_search: true,
+        ...(message && typeof message.feature_config === 'object' ? message.feature_config : {}),
+    }
+
+    return {
+        fid: message?.fid || generateUUID(),
+        parentId: message?.parentId || null,
+        childrenIds: Array.isArray(message?.childrenIds) && message.childrenIds.length > 0
+            ? message.childrenIds
+            : [generateUUID()],
+        role: message?.role || 'user',
+        content: message?.content || '',
+        user_action: message?.user_action || 'chat',
+        files: Array.isArray(message?.files) ? message.files : [],
+        timestamp: message?.timestamp || timestampSeconds,
+        models: Array.isArray(message?.models) && message.models.length > 0 ? message.models : [body.model],
+        chat_type: message?.chat_type || body.chat_type || 't2t',
+        feature_config: featureConfig,
+        extra: {
+            ...(message && typeof message.extra === 'object' ? message.extra : {}),
+            meta: {
+                ...(message?.extra && typeof message.extra.meta === 'object' ? message.extra.meta : {}),
+                subChatType: message?.sub_chat_type || body.sub_chat_type || body.chat_type || 't2t',
+            },
+        },
+        sub_chat_type: message?.sub_chat_type || body.sub_chat_type || body.chat_type || 't2t',
+    }
+}
+
+function buildWebCompletionBody(body, chatId) {
+    const timestampSeconds = Math.floor(Date.now() / 1000)
+    const messages = Array.isArray(body.messages) && body.messages.length > 0 ? body.messages : []
+
+    return {
+        ...body,
+        stream: true,
+        version: body.version || '2.1',
+        incremental_output: true,
+        chat_id: chatId,
+        chat_mode: body.chat_mode || 'normal',
+        parent_id: body.parent_id || null,
+        messages: messages.map(message => buildWebCompletionMessage(message, body, timestampSeconds)),
+        timestamp: body.timestamp || timestampSeconds,
+    }
 }
 
 /**
@@ -78,12 +133,15 @@ const sendChatRequest = async (body) => {
             const requestConfig = {
                 headers: buildQwenBrowserHeaders({
                     authorization: `Bearer ${currentToken}`,
+                    accept: 'application/json',
+                    version: '0.2.64',
                     chatBaseUrl,
                     cookie: `ssxmod_itna=${getSsxmodItna()};ssxmod_itna2=${getSsxmodItna2()}`,
                 }),
                 responseType: 'stream',
                 timeout: 60 * 1000,
             }
+            requestConfig.headers['x-accel-buffering'] = 'no'
 
             // Prefer the smart-pool binding when available; fall back to
             // the legacy single-proxy (config.proxyUrl) otherwise.
@@ -94,14 +152,15 @@ const sendChatRequest = async (body) => {
                 requestConfig.proxy = false
             }
 
-            const chat_id = await generateChatID(currentToken, body.model, currentEmail, currentProxy)
+            const chat_id = await generateChatID(currentToken, body.model, currentEmail, currentProxy, body.chat_type)
+            if (!chat_id) {
+                throw new Error('Failed to generate chat_id — upstream may be unreachable')
+            }
+            requestConfig.headers.Referer = `${chatBaseUrl}/c/${chat_id}`
+            const upstreamBody = buildWebCompletionBody(body, chat_id)
 
             logger.network(`Sending chat request (attempt ${attempt}/${MAX_RETRIES}, proxy: ${getProxyHost(currentProxy)})`, 'REQUEST')
-            const response = await axios.post(`${chatBaseUrl}/api/v2/chat/completions?chat_id=` + chat_id, {
-                ...body,
-                stream: true,
-                chat_id: chat_id
-            }, requestConfig)
+            const response = await axios.post(`${chatBaseUrl}/api/v2/chat/completions?chat_id=` + chat_id, upstreamBody, requestConfig)
 
             if (response.status === 200) {
                 if (currentEmail && typeof accountManager.resetAccountRateLimit === 'function') {
@@ -151,13 +210,14 @@ const sendChatRequest = async (body) => {
  * @param {string} [proxyUrl] - Proxy URL (overrides legacy single-proxy)
  * @returns {Promise<string|null>} Generated chat_id or null
  */
-const generateChatID = async (currentToken, model, email = null, proxyUrl = null) => {
+const generateChatID = async (currentToken, model, email = null, proxyUrl = null, chatType = 't2t') => {
     try {
         const chatBaseUrl = getChatBaseUrl()
 
         const requestConfig = {
             headers: buildQwenBrowserHeaders({
                 authorization: `Bearer ${currentToken}`,
+                version: '0.2.64',
                 chatBaseUrl,
                 cookie: `ssxmod_itna=${getSsxmodItna()};ssxmod_itna2=${getSsxmodItna2()}`,
             })
@@ -174,7 +234,7 @@ const generateChatID = async (currentToken, model, email = null, proxyUrl = null
             "title": "New Chat",
             "models": [model],
             "chat_mode": "local",
-            "chat_type": "t2i",
+            "chat_type": chatType || 't2t',
             "timestamp": new Date().getTime()
         }, requestConfig)
 

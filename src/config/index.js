@@ -126,8 +126,8 @@ const config = {
     maxLogFiles: parseInt(process.env.MAX_LOG_FILES) || 5,
     // Custom reverse proxy URL config
     qwenChatProxyUrl: process.env.QWEN_CHAT_PROXY_URL || "https://chat.qwen.ai",
-    qwenBrowserVersion: normalizeOptionalHeaderValue(process.env.QWEN_BROWSER_VERSION, '0.1.13'),
-    qwenBrowserBxV: normalizeOptionalHeaderValue(process.env.QWEN_BROWSER_BX_V, '2.5.31'),
+    qwenBrowserVersion: normalizeOptionalHeaderValue(process.env.QWEN_BROWSER_VERSION, '0.2.64'),
+    qwenBrowserBxV: normalizeOptionalHeaderValue(process.env.QWEN_BROWSER_BX_V, '2.5.36'),
     // Single-proxy legacy field (kept for getProxyAgent backward compat)
     proxyUrl: process.env.PROXY_URL || null,
     // Smart proxy pool: list of proxy URLs (PROXIES env + PROXY_URL fallback,

@@ -342,6 +342,17 @@ const parserMessages = async (messages, thinking_config, chat_type) => {
                 feature_config: {
                     "output_schema": "phase",
                     "thinking_enabled": false,
+                    "research_mode": "normal",
+                    "auto_thinking": false,
+                    "thinking_mode": "Auto",
+                    "thinking_format": "summary",
+                    "auto_search": false,
+                    "code_interpreter": false,
+                    "plugins_enabled": false,
+                    "function_calling": false,
+                    "enable_tools": false,
+                    "enable_function_call": false,
+                    "tool_choice": "none",
                 }
             });
 
@@ -376,7 +387,18 @@ const parserMessages = async (messages, thinking_config, chat_type) => {
                 "extra": {},
                 "feature_config": {
                     "output_schema": "phase",
-                    "enabled": false,
+                    "thinking_enabled": false,
+                    "research_mode": "normal",
+                    "auto_thinking": false,
+                    "thinking_mode": "Auto",
+                    "thinking_format": "summary",
+                    "auto_search": false,
+                    "code_interpreter": false,
+                    "plugins_enabled": false,
+                    "function_calling": false,
+                    "enable_tools": false,
+                    "enable_function_call": false,
+                    "tool_choice": "none",
                 }
             }
         ]
@@ -401,6 +423,17 @@ const processOriginalLogic = async (messages, thinking_config, chat_type, imgCac
             message.feature_config = {
                 "output_schema": "phase",
                 "thinking_enabled": false,
+                "research_mode": "normal",
+                "auto_thinking": false,
+                "thinking_mode": "Auto",
+                "thinking_format": "summary",
+                "auto_search": false,
+                "code_interpreter": false,
+                "plugins_enabled": false,
+                "function_calling": false,
+                "enable_tools": false,
+                "enable_function_call": false,
+                "tool_choice": "none",
             }
 
             if (!Array.isArray(message.content)) continue
@@ -418,6 +451,17 @@ const processOriginalLogic = async (messages, thinking_config, chat_type, imgCac
                     item.feature_config = {
                         "output_schema": "phase",
                         "thinking_enabled": false,
+                        "research_mode": "normal",
+                        "auto_thinking": false,
+                        "thinking_mode": "Auto",
+                        "thinking_format": "summary",
+                        "auto_search": false,
+                        "code_interpreter": false,
+                        "plugins_enabled": false,
+                        "function_calling": false,
+                        "enable_tools": false,
+                        "enable_function_call": false,
+                        "tool_choice": "none",
                     }
 
                     if (newContent.length >= 2) {
@@ -429,6 +473,17 @@ const processOriginalLogic = async (messages, thinking_config, chat_type, imgCac
                             "feature_config": {
                                 "output_schema": "phase",
                                 "thinking_enabled": false,
+                                "research_mode": "normal",
+                                "auto_thinking": false,
+                                "thinking_mode": "Auto",
+                                "thinking_format": "summary",
+                                "auto_search": false,
+                                "code_interpreter": false,
+                                "plugins_enabled": false,
+                                "function_calling": false,
+                                "enable_tools": false,
+                                "enable_function_call": false,
+                                "tool_choice": "none",
                             }
                         })
                     } else {
